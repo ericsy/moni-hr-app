@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "moni-hr-app",
-    "slug": "moni-hr-app",
+    "name": "Moni HR",
+    "slug": "moni-hr",
+    "scheme": "moni-hr",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -25,6 +26,10 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-localization"
+    ]
   }
 }
