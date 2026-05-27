@@ -4,26 +4,25 @@ import '../src/i18n';
 
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { Platform } from 'react-native';
 
-import { AuthProvider } from '../src/context/AuthContext';
+import { AppProviders } from '../src/providers/AppProviders';
 import { colors } from '../src/theme/colors';
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <AuthProvider>
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-            }}
-          />
-        </AuthProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <AppProviders>
+      <StatusBar
+        style="dark"
+        translucent={Platform.OS === 'android' ? false : undefined}
+        backgroundColor={Platform.OS === 'android' ? colors.surface : undefined}
+      />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background },
+        }}
+      />
+    </AppProviders>
   );
 }

@@ -6,26 +6,45 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
+import { loadRememberLogin, saveRememberLogin } from '../../src/utils/rememberLogin';
 
 export default function ChangePasswordScreen() {
   const { t } = useTranslation();
-  const { changePassword } = useAuth();
+  const { changePassword, session } = useAuth();
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
 
   const onSave = async () => {
+    if (!oldPassword.trim() || !newPassword.trim() || !confirm.trim()) {
+      Alert.alert(t('changePasswordTitle'), t('passwordFieldsRequired'));
+      return;
+    }
+    if (newPassword.trim().length < 8) {
+      Alert.alert(t('changePasswordTitle'), t('passwordMinLength'));
+      return;
+    }
     if (newPassword !== confirm) {
-      Alert.alert(t('changePasswordTitle'), t('confirmPassword'));
+      Alert.alert(t('changePasswordTitle'), t('passwordMismatch'));
       return;
     }
     setBusy(true);
     const res = await changePassword(oldPassword, newPassword);
     setBusy(false);
     if (!res.ok) {
-      Alert.alert(t('changePasswordTitle'), res.error === 'wrong' ? t('wrongPassword') : t('loginErrorEmpty'));
+      Alert.alert(
+        t('changePasswordTitle'),
+        res.message ?? (res.error === 'empty' ? t('passwordFieldsRequired') : t('passwordChangeFailed')),
+      );
       return;
+    }
+    const email = session?.user.email?.trim();
+    if (email) {
+      const saved = await loadRememberLogin();
+      if (saved && saved.email.trim().toLowerCase() === email.toLowerCase()) {
+        await saveRememberLogin(email, newPassword.trim());
+      }
     }
     Alert.alert(t('changePasswordTitle'), t('passwordUpdated'), [
       { text: t('submit'), onPress: () => router.back() },
@@ -38,6 +57,7 @@ export default function ChangePasswordScreen() {
         options={{
           headerShown: true,
           title: t('changePasswordTitle'),
+          headerBackTitle: t('profileTitle'),
           headerTintColor: colors.primary,
           headerStyle: { backgroundColor: colors.surface },
           headerShadowVisible: false,
@@ -71,8 +91,6 @@ export default function ChangePasswordScreen() {
           >
             <Text style={styles.btnText}>{busy ? '…' : t('save')}</Text>
           </Pressable>
-
-          <Text style={styles.hint}>{t('loginDemo')}</Text>
         </View>
       </SafeAreaView>
     </>
@@ -103,5 +121,4 @@ const styles = StyleSheet.create({
   btnPressed: { backgroundColor: colors.primaryDark },
   disabled: { opacity: 0.6 },
   btnText: { color: '#fff', fontWeight: '900', fontSize: 15 },
-  hint: { marginTop: 12, color: colors.textMuted, fontSize: 12, lineHeight: 18 },
 });

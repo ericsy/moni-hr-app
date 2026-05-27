@@ -1,22 +1,68 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
 import React, {
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
-import { setAppLanguage } from '../i18n';
+import {
+  cancelAttendanceRequest as cancelAttendanceRequestApi,
+  createAttendanceRequest,
+  fetchMyAttendanceRequests,
+  fetchPendingApprovalAttendanceRequests,
+  reviewAttendanceRequest as reviewAttendanceRequestApi,
+} from '../api/attendance';
+import {
+  buildAttendanceCreateBody,
+  mapAttendanceRequestToLeaveRequest,
+  type SubmitAttendanceInput,
+} from '../api/mapAttendanceRequest';
+import { enrichShiftBindingsFromSchedule } from '../utils/requestShiftBinding';
+import { fetchClockPunchesByDay, postClockPunch } from '../api/clock';
+import { mapPunchesByPublishedCell } from '../api/mapClockPunches';
+import {
+  activateEmployeeAccount,
+  changeEmployeePassword,
+  fetchCurrentEmployee,
+  loginWithEmail,
+  logoutSession,
+  sendActivationCode,
+  updateLastStore,
+} from '../api/auth';
+import {
+  ApiError,
+  configureApiClient,
+  configureUnauthorizedHandler,
+  resetUnauthorizedGuard,
+} from '../api/client';
+import { mapEmployeeToUser } from '../api/mapEmployeeUser';
+import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
+import type { ShiftPunchRecord } from '../api/types';
+import i18n, { setAppLanguage } from '../i18n';
+import {
+  resetSessionExpiredAlert,
+  showSessionExpiredAlert,
+} from '../utils/sessionExpiredAlert';
+import { getPunchDevicePayload } from '../utils/punchDevice';
+import { punchRecordMatchesTarget, shiftMatchTargetFromSlot } from '../utils/shiftIdentity';
+import { resetServerClockState, setClockSkewWarningHandler, syncServerTimeFromMillis } from '../utils/serverClock';
+import * as Location from 'expo-location';
 
 const AUTH_KEY = 'moni-hr-session-v1';
+const TOKEN_KEY = 'moni-hr-access-token';
 const LANG_KEY = 'moni-hr-lang-v1';
 
 /** 员工可任职的门店（多店时由 selectedStoreId 决定当前上下文） */
 export type StoreRef = {
   id: string;
   name: string;
+  /** 该门店是否已配置店长；来自 storeDetails / 考勤列表接口 */
+  hasStoreManager?: boolean;
 };
 
 export type UserRole = 'staff' | 'manager';
@@ -26,6 +72,13 @@ export type User = {
   name: string;
   employeeId: string;
   role: UserRole;
+  /** 登录/me 下发的职位文案（按 App 语言展示） */
+  roleTitleZh?: string;
+  roleTitleEn?: string;
+  /** 担任店长或副店长的门店 id（用于店铺排班可见性） */
+  managedStoreIds: string[];
+  storeManagerStoreIds: string[];
+  deputyManagerStoreIds: string[];
   activated: boolean;
   email: string;
   phone: string;
@@ -34,16 +87,25 @@ export type User = {
 };
 
 function migrateUser(u: User & { storeName?: string }): User {
+  const managedStoreIds = u.managedStoreIds ?? [];
+  const storeManagerStoreIds = u.storeManagerStoreIds ?? managedStoreIds;
+  const deputyManagerStoreIds = u.deputyManagerStoreIds ?? [];
+  const base = {
+    ...u,
+    managedStoreIds,
+    storeManagerStoreIds,
+    deputyManagerStoreIds,
+  };
   if (u.stores?.length) {
     return {
-      ...u,
+      ...base,
       selectedStoreId: u.selectedStoreId ?? u.stores[0].id,
     };
   }
   const fallbackId = 'store-default';
   const label = u.storeName ?? 'Store';
   return {
-    ...u,
+    ...base,
     stores: [{ id: fallbackId, name: label }],
     selectedStoreId: fallbackId,
   };
@@ -54,20 +116,51 @@ export function getActiveStore(user: User | undefined): StoreRef | undefined {
   return user.stores.find((s) => s.id === user.selectedStoreId) ?? user.stores[0];
 }
 
+export type { ShiftPunchRecord } from '../api/types';
+
+export type RequestScheduleContext = {
+  workDate: string;
+  slots: MyPublishedShiftSlot[];
+};
+
+/** 请假时段：单段或同日多班每段可单独设置部分时段 */
+export type LeaveTimeSpan = {
+  mode: 'full' | 'partial';
+  from?: string;
+  to?: string;
+};
+
+/** 请假 / 漏打卡均绑定到已发布排班的一段班次 */
+export type RequestShiftBinding = {
+  workDate: string;
+  slotIndex: number;
+  scheduleId?: string;
+  /** 班次快照键（日期+时段），用于与历史申请/打卡匹配 */
+  shiftKey?: string;
+  areaName: string;
+  shiftName: string;
+  scheduledRange: string;
+};
+
 export type LeaveRequest = {
   id: string;
-  type: 'leave' | 'swap' | 'missed_punch';
+  type: 'leave' | 'missed_punch';
+  /** 提交人（演示/对接审批用） */
+  applicantId?: string;
+  applicantName?: string;
+  /** 提交时所在门店 */
+  storeId?: string;
+  /** 与 shift.workDate 相同，便于列表排序 */
   start: string;
   end: string;
   reason: string;
-  status: 'pending' | 'approved' | 'rejected';
-  /** 漏打卡：必须绑定到某一「排班段」，而非整天 */
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  /** 请假可多段（多天）；漏打卡为一段 */
+  shifts: RequestShiftBinding[];
+  /** 仅单段请假：整段或班次内部分时段 */
+  leaveTime?: LeaveTimeSpan;
+  /** 仅漏打卡 */
   missedPunch?: {
-    workDate: string;
-    slotIndex: number;
-    region: string;
-    shiftKey: string;
-    scheduledRange: string;
     punchKind: 'in' | 'out';
     proposedTime: string;
   };
@@ -81,98 +174,207 @@ type AuthContextValue = {
   ready: boolean;
   session: Session | null;
   language: 'en' | 'zh';
-  login: (account: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  login: (account: string, password: string) => Promise<{ ok: boolean; error?: string; message?: string }>;
   logout: () => Promise<void>;
-  activateAccount: (code: string) => Promise<{ ok: boolean; error?: string }>;
+  sendActivationCode: (
+    email: string,
+  ) => Promise<{ ok: boolean; retryAfterSeconds?: number; message?: string; error?: string }>;
+  activateAccount: (
+    email: string,
+    code: string,
+    password: string,
+  ) => Promise<{ ok: boolean; error?: string; message?: string }>;
   setLanguage: (lng: 'en' | 'zh') => Promise<void>;
-  changePassword: (oldPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+  changePassword: (
+    oldPassword: string,
+    newPassword: string,
+  ) => Promise<{ ok: boolean; error?: string; message?: string }>;
   updateProfile: (patch: Partial<Pick<User, 'email' | 'phone'>>) => void;
-  /** 切换当前门店（写入会话；数据层按此 id 拉取店铺排班等） */
-  setSelectedStore: (storeId: string) => void;
+  setSelectedStore: (storeId: string) => Promise<void>;
+  /** 拉取 GET /api/v1/app/auth/me，更新员工信息与门店列表 */
+  refreshCurrentEmployee: () => Promise<{ ok: boolean; message?: string }>;
   clockEvents: { id: string; type: 'in' | 'out'; at: string }[];
+  /** @deprecated 请使用 punchShift；打卡 Tab 保留兼容 */
   punch: (type: 'in' | 'out') => void;
-  addRequest: (input: Omit<LeaveRequest, 'id' | 'status'>) => void;
-  requests: LeaveRequest[];
+  shiftPunches: ShiftPunchRecord[];
+  getShiftPunch: (
+    workDate: string,
+    slot: { id: string; range: string; areaName: string; shiftName: string },
+  ) => ShiftPunchRecord | undefined;
+  punchShift: (
+    scheduleId: string,
+    workDate: string,
+    kind: 'in' | 'out',
+  ) => Promise<{ ok: boolean; message?: string }>;
+  /** GET /api/v1/app/clock/punches，刷新指定日期的班次打卡状态 */
+  refreshShiftPunchesForDate: (workDate: string) => Promise<{ ok: boolean; message?: string }>;
+  /** 指定日期的打卡记录是否已成功拉取（未拉取前 UI 不展示打卡状态提示） */
+  isShiftPunchDateLoaded: (workDate: string) => boolean;
+  publishedScheduleByDate: Record<string, MyPublishedShiftSlot[]>;
+  mergePublishedSchedule: (byDate: Record<string, MyPublishedShiftSlot[]>) => void;
+  requestScheduleContext: RequestScheduleContext | null;
+  setRequestScheduleContext: (ctx: RequestScheduleContext | null) => void;
+  myAttendanceRequests: LeaveRequest[];
+  approvalAttendanceRequests: LeaveRequest[];
+  /** 当前门店是否已有店长（me / 考勤列表下发） */
+  selectedStoreHasStoreManager: boolean | null;
+  refreshAttendanceRequests: () => Promise<{ ok: boolean; message?: string }>;
+  submitAttendanceRequest: (
+    input: SubmitAttendanceInput,
+  ) => Promise<{ ok: boolean; message?: string }>;
+  reviewAttendanceRequest: (
+    id: string,
+    approved: boolean,
+    reviewComment?: string,
+  ) => Promise<{ ok: boolean; message?: string }>;
+  /** 撤回本人待审批申请 */
+  cancelAttendanceRequest: (id: string) => Promise<{ ok: boolean; message?: string }>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function buildUser(account: string): User {
-  const normalized = account.trim().toLowerCase();
-  const isManager = normalized === 'manager';
-  const pending = normalized === 'activate';
-  const stores: StoreRef[] = [
-    { id: 'store-akl', name: 'Auckland Flagship' },
-    { id: 'store-chc', name: 'Christchurch Hub' },
-  ];
-  return {
-    id: 'u-1',
-    name: isManager ? 'Alex Chen' : 'Sam Li',
-    employeeId: isManager ? 'M-1024' : 'S-2048',
-    role: isManager ? 'manager' : 'staff',
-    activated: !pending,
-    email: isManager ? 'alex@example.com' : 'sam@example.com',
-    phone: isManager ? '+64 21 000 0001' : '+64 21 000 0002',
-    stores,
-    selectedStoreId: stores[0].id,
-  };
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [language, setLanguageState] = useState<'en' | 'zh'>('en');
   const [clockEvents, setClockEvents] = useState<{ id: string; type: 'in' | 'out'; at: string }[]>([]);
-  const [requests, setRequests] = useState<LeaveRequest[]>([
-    {
-      id: 'r-1',
-      type: 'leave',
-      start: '2026-05-18',
-      end: '2026-05-19',
-      reason: 'Family',
-      status: 'pending',
-    },
-    {
-      id: 'r-2',
-      type: 'swap',
-      start: '2026-05-22',
-      end: '2026-05-22',
-      reason: 'Study',
-      status: 'approved',
-    },
-    {
-      id: 'r-3',
-      type: 'missed_punch',
-      start: '2026-05-13',
-      end: '2026-05-13',
-      reason: 'Forgot after opening rush',
-      status: 'pending',
-      missedPunch: {
-        workDate: '2026-05-13',
-        slotIndex: 0,
-        region: 'regionFoH',
-        shiftKey: 'shiftOpen',
-        scheduledRange: '08:30–12:30',
-        punchKind: 'in',
-        proposedTime: '08:35',
-      },
-    },
-  ]);
+  const [shiftPunches, setShiftPunches] = useState<ShiftPunchRecord[]>([]);
+  const [shiftPunchDatesLoaded, setShiftPunchDatesLoaded] = useState<Record<string, true>>({});
+  const [publishedScheduleByDate, setPublishedScheduleByDate] = useState<
+    Record<string, MyPublishedShiftSlot[]>
+  >({});
+  const [requestScheduleContext, setRequestScheduleContext] = useState<RequestScheduleContext | null>(
+    null,
+  );
+  const [myAttendanceRequests, setMyAttendanceRequests] = useState<LeaveRequest[]>([]);
+  const [approvalAttendanceRequests, setApprovalAttendanceRequests] = useState<LeaveRequest[]>([]);
+  const [selectedStoreHasStoreManager, setSelectedStoreHasStoreManager] = useState<boolean | null>(
+    null,
+  );
+
+  const accessTokenRef = useRef<string | null>(null);
+  const languageRef = useRef<'en' | 'zh'>('en');
+
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
+  useEffect(() => {
+    configureApiClient(
+      () => accessTokenRef.current,
+      () => languageRef.current,
+    );
+  }, []);
+
+  const clearSessionLocally = useCallback(async () => {
+    setClockEvents([]);
+    setShiftPunches([]);
+    setShiftPunchDatesLoaded({});
+    setPublishedScheduleByDate({});
+    setRequestScheduleContext(null);
+    setMyAttendanceRequests([]);
+    setApprovalAttendanceRequests([]);
+    setSelectedStoreHasStoreManager(null);
+    accessTokenRef.current = null;
+    setAccessToken(null);
+    setSession(null);
+    resetServerClockState();
+    await Promise.all([AsyncStorage.removeItem(AUTH_KEY), AsyncStorage.removeItem(TOKEN_KEY)]);
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    showSessionExpiredAlert(() => {
+      resetUnauthorizedGuard();
+      resetSessionExpiredAlert();
+      void clearSessionLocally();
+    });
+  }, [clearSessionLocally]);
+
+  useEffect(() => {
+    configureUnauthorizedHandler(handleUnauthorized);
+  }, [handleUnauthorized]);
+
+  useEffect(() => {
+    setClockSkewWarningHandler((skewMs) => {
+      const minutes = Math.max(1, Math.ceil(Math.abs(skewMs) / 60000));
+      Alert.alert(
+        i18n.t('deviceClockSkewTitle'),
+        i18n.t('deviceClockSkewMessage', { minutes }),
+        [{ text: i18n.t('deviceClockSkewOk') }],
+      );
+    });
+    return () => {
+      setClockSkewWarningHandler(null);
+    };
+  }, []);
+
+  const persistAuth = useCallback(async (nextSession: Session | null, token: string | null) => {
+    setSession(nextSession);
+    setAccessToken(token);
+    accessTokenRef.current = token;
+    if (nextSession && token) {
+      await Promise.all([
+        AsyncStorage.setItem(AUTH_KEY, JSON.stringify(nextSession)),
+        AsyncStorage.setItem(TOKEN_KEY, token),
+      ]);
+    } else {
+      await Promise.all([AsyncStorage.removeItem(AUTH_KEY), AsyncStorage.removeItem(TOKEN_KEY)]);
+    }
+  }, []);
+
+  const refreshSessionFromApi = useCallback(async (token: string) => {
+    accessTokenRef.current = token;
+    setAccessToken(token);
+    const emp = await fetchCurrentEmployee();
+    const user = mapEmployeeToUser(emp);
+    const next: Session = { user };
+    setSession(next);
+    await Promise.all([
+      AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next)),
+      AsyncStorage.setItem(TOKEN_KEY, token),
+    ]);
+    return next;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [rawSession, rawLang] = await Promise.all([
+        const [rawSession, rawToken, rawLang] = await Promise.all([
           AsyncStorage.getItem(AUTH_KEY),
+          AsyncStorage.getItem(TOKEN_KEY),
           AsyncStorage.getItem(LANG_KEY),
         ]);
         if (cancelled) return;
         if (rawLang === 'en' || rawLang === 'zh') {
           setLanguageState(rawLang);
           setAppLanguage(rawLang);
+          languageRef.current = rawLang;
         }
-        if (rawSession) {
+        if (rawToken) {
+          try {
+            await refreshSessionFromApi(rawToken);
+          } catch (e) {
+            if (e instanceof ApiError && e.code === 401) {
+              showSessionExpiredAlert(() => {
+                resetUnauthorizedGuard();
+                resetSessionExpiredAlert();
+                void clearSessionLocally();
+              });
+            } else if (rawSession) {
+              const parsed = JSON.parse(rawSession) as Session;
+              const u = migrateUser(parsed.user as User & { storeName?: string });
+              await persistAuth({ user: u }, rawToken);
+            } else {
+              await persistAuth(null, null);
+            }
+          }
+        } else if (rawSession) {
           const parsed = JSON.parse(rawSession) as Session;
           const u = migrateUser(parsed.user as User & { storeName?: string });
           setSession({ user: u });
@@ -186,58 +388,124 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [persistAuth, refreshSessionFromApi, clearSessionLocally]);
 
-  const persistSession = useCallback(async (next: Session | null) => {
-    setSession(next);
-    if (next) await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
-    else await AsyncStorage.removeItem(AUTH_KEY);
-  }, []);
-
-  const login = useCallback(async (account: string, _password: string) => {
-    const trimmed = account.trim();
-    if (!trimmed) {
-      return { ok: false, error: 'empty' };
-    }
-    await persistSession({ user: buildUser(trimmed) });
-    return { ok: true };
-  }, [persistSession]);
-
-  const logout = useCallback(async () => {
-    setClockEvents([]);
-    await persistSession(null);
-  }, [persistSession]);
-
-  const activateAccount = useCallback(
-    async (code: string) => {
-      if (!code.trim()) {
+  const login = useCallback(
+    async (account: string, password: string) => {
+      const email = account.trim();
+      if (!email || !password) {
         return { ok: false, error: 'empty' };
       }
-      setSession((prev) => {
-        if (!prev) return prev;
-        const next: Session = { user: { ...prev.user, activated: true } };
-        void AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
-        return next;
-      });
-      return { ok: true };
+      try {
+        const result = await loginWithEmail(email, password);
+        const user = mapEmployeeToUser(result.user);
+        resetUnauthorizedGuard();
+        resetSessionExpiredAlert();
+        await persistAuth({ user }, result.accessToken);
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : undefined;
+        return { ok: false, error: 'api', message };
+      }
     },
-    [],
+    [persistAuth],
+  );
+
+  const logout = useCallback(async () => {
+    if (accessTokenRef.current) {
+      try {
+        await logoutSession();
+      } catch {
+        // 本地仍清除会话
+      }
+    }
+    resetUnauthorizedGuard();
+    resetSessionExpiredAlert();
+    resetServerClockState();
+    setClockEvents([]);
+    setShiftPunches([]);
+    setShiftPunchDatesLoaded({});
+    setPublishedScheduleByDate({});
+    setRequestScheduleContext(null);
+    setMyAttendanceRequests([]);
+    setApprovalAttendanceRequests([]);
+    setSelectedStoreHasStoreManager(null);
+    await persistAuth(null, null);
+  }, [persistAuth]);
+
+  const sendActivationCodeToEmail = useCallback(async (email: string) => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      return { ok: false, error: 'empty_email' as const };
+    }
+    try {
+      const result = await sendActivationCode({ email: trimmed });
+      return {
+        ok: true,
+        retryAfterSeconds: result.retryAfterSeconds ?? 60,
+      };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      if (e instanceof ApiError && e.code === 409) {
+        return { ok: false, error: 'rate_limit' as const, retryAfterSeconds: 60, message };
+      }
+      return { ok: false, error: 'api' as const, message };
+    }
+  }, []);
+
+  const activateAccount = useCallback(
+    async (email: string, code: string, password: string) => {
+      const trimmedEmail = email.trim();
+      const trimmedCode = code.trim();
+      if (!trimmedEmail) {
+        return { ok: false, error: 'empty_email' };
+      }
+      if (!/^\d{4}$/.test(trimmedCode)) {
+        return { ok: false, error: 'invalid_code' };
+      }
+      if (password.length < 8) {
+        return { ok: false, error: 'invalid_password' };
+      }
+      try {
+        const result = await activateEmployeeAccount({
+          email: trimmedEmail,
+          code: trimmedCode,
+          password,
+        });
+        const user = mapEmployeeToUser(result.user);
+        resetUnauthorizedGuard();
+        resetSessionExpiredAlert();
+        await persistAuth({ user }, result.accessToken);
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : undefined;
+        return { ok: false, error: 'api', message };
+      }
+    },
+    [persistAuth],
   );
 
   const setLanguage = useCallback(async (lng: 'en' | 'zh') => {
     setLanguageState(lng);
+    languageRef.current = lng;
     setAppLanguage(lng);
     await AsyncStorage.setItem(LANG_KEY, lng);
   }, []);
 
   const changePassword = useCallback(async (oldPassword: string, newPassword: string) => {
-    if (!oldPassword || !newPassword) {
+    if (!oldPassword?.trim() || !newPassword?.trim()) {
       return { ok: false, error: 'empty' };
     }
-    if (oldPassword === 'wrong') {
-      return { ok: false, error: 'wrong' };
+    try {
+      await changeEmployeePassword({
+        currentPassword: oldPassword.trim(),
+        newPassword: newPassword.trim(),
+      });
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      return { ok: false, error: 'api', message };
     }
-    return { ok: true };
   }, []);
 
   const updateProfile = useCallback((patch: Partial<Pick<User, 'email' | 'phone'>>) => {
@@ -249,25 +517,293 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const setSelectedStore = useCallback((storeId: string) => {
-    setSession((prev) => {
-      if (!prev) return prev;
-      if (!prev.user.stores.some((s) => s.id === storeId)) return prev;
+  const refreshCurrentEmployee = useCallback(async () => {
+    const token = accessTokenRef.current;
+    if (!token) {
+      return { ok: false, message: 'Not signed in' };
+    }
+    try {
+      const prevSelected = session?.user.selectedStoreId;
+      accessTokenRef.current = token;
+      const emp = await fetchCurrentEmployee();
+      let user = mapEmployeeToUser(emp);
+      if (prevSelected && user.stores.some((s) => s.id === prevSelected)) {
+        user = { ...user, selectedStoreId: prevSelected };
+      }
+      const next: Session = { user };
+      setSession(next);
+      await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      return { ok: false, message };
+    }
+  }, [session?.user.selectedStoreId]);
+
+  const setSelectedStore = useCallback(
+    async (storeId: string) => {
+      const prev = session;
+      if (!prev) return;
+      if (!prev.user.stores.some((s) => s.id === storeId)) return;
+
       const next: Session = { user: { ...prev.user, selectedStoreId: storeId } };
-      void AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
-      return next;
+      setSession(next);
+      setShiftPunches([]);
+      setShiftPunchDatesLoaded({});
+      setMyAttendanceRequests([]);
+      setApprovalAttendanceRequests([]);
+      setSelectedStoreHasStoreManager(null);
+      await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+
+      const numericId = Number(storeId);
+      if (!Number.isFinite(numericId) || !accessTokenRef.current) return;
+
+      try {
+        await updateLastStore(numericId);
+        const emp = await fetchCurrentEmployee();
+        const user = mapEmployeeToUser(emp);
+        const synced: Session = { user: { ...user, selectedStoreId: storeId } };
+        setSession(synced);
+        await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(synced));
+      } catch {
+        // 保留本地已选门店
+      }
+    },
+    [session],
+  );
+
+  const getShiftPunch = useCallback(
+    (
+      workDate: string,
+      slot: { id: string; range: string; areaName: string; shiftName: string },
+    ) => {
+      const target = shiftMatchTargetFromSlot(workDate, slot);
+      return shiftPunches.find((p) => punchRecordMatchesTarget(p, target));
+    },
+    [shiftPunches],
+  );
+
+  const mergeShiftPunchesForDate = useCallback((workDate: string, records: ShiftPunchRecord[]) => {
+    setShiftPunches((prev) => {
+      const rest = prev.filter((p) => p.workDate !== workDate);
+      return [...rest, ...records];
     });
   }, []);
+
+  const isShiftPunchDateLoaded = useCallback(
+    (workDate: string) => !!shiftPunchDatesLoaded[workDate],
+    [shiftPunchDatesLoaded],
+  );
+
+  const refreshShiftPunchesForDate = useCallback(
+    async (workDate: string): Promise<{ ok: boolean; message?: string }> => {
+      const storeId = session?.user.selectedStoreId;
+      if (!storeId || !workDate.trim()) {
+        return { ok: false };
+      }
+      try {
+        const data = await fetchClockPunchesByDay({ storeId, date: workDate });
+        const records = mapPunchesByPublishedCell(data.punches ?? [], workDate);
+        mergeShiftPunchesForDate(workDate, records);
+        setShiftPunchDatesLoaded((prev) => ({ ...prev, [workDate]: true }));
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : undefined;
+        return { ok: false, message };
+      }
+    },
+    [session?.user.selectedStoreId, mergeShiftPunchesForDate],
+  );
+
+  const punchShift = useCallback(
+    async (
+      scheduleId: string,
+      workDate: string,
+      kind: 'in' | 'out',
+    ): Promise<{ ok: boolean; message?: string }> => {
+      const storeId = session?.user.selectedStoreId;
+      if (!storeId) {
+        return { ok: false, message: i18n.t('punchErrorNoStore') };
+      }
+
+      const cellId = Number(scheduleId);
+      if (!Number.isFinite(cellId) || cellId <= 0) {
+        return { ok: false, message: i18n.t('punchErrorInvalidCell') };
+      }
+
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        return { ok: false, message: i18n.t('clockPermissionDenied') };
+      }
+
+      try {
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const { deviceType, deviceId } = getPunchDevicePayload();
+
+        const data = await postClockPunch({
+          storeId,
+          body: {
+            publishedCellId: cellId,
+            punchType: kind === 'in' ? 'clock_in' : 'clock_out',
+            deviceType,
+            deviceId,
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          },
+        });
+
+        const at = data.punchedAt || new Date().toISOString();
+        syncServerTimeFromMillis(new Date(at).getTime());
+        await refreshShiftPunchesForDate(workDate);
+        setClockEvents((prev) => [...prev, { id: `${scheduleId}-${kind}-${at}`, type: kind, at }]);
+
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : i18n.t('punchFailed');
+        return { ok: false, message };
+      }
+    },
+    [session?.user.selectedStoreId, refreshShiftPunchesForDate],
+  );
 
   const punch = useCallback((type: 'in' | 'out') => {
     const at = new Date().toISOString();
     setClockEvents((prev) => [...prev, { id: `${type}-${at}`, type, at }]);
   }, []);
 
-  const addRequest = useCallback((input: Omit<LeaveRequest, 'id' | 'status'>) => {
-    const id = `r-${Date.now()}`;
-    setRequests((prev) => [{ ...input, id, status: 'pending' }, ...prev]);
+  const mergePublishedSchedule = useCallback((byDate: Record<string, MyPublishedShiftSlot[]>) => {
+    setPublishedScheduleByDate((prev) => ({ ...prev, ...byDate }));
   }, []);
+
+  const refreshAttendanceRequests = useCallback(async (): Promise<{
+    ok: boolean;
+    message?: string;
+  }> => {
+    const storeId = session?.user.selectedStoreId;
+    const user = session?.user;
+    if (!storeId || !user) {
+      setMyAttendanceRequests([]);
+      setApprovalAttendanceRequests([]);
+      setSelectedStoreHasStoreManager(null);
+      return { ok: false };
+    }
+    try {
+      const storeRef = user.stores.find((s) => s.id === storeId);
+      let storeHasManager: boolean | null = storeRef?.hasStoreManager ?? null;
+
+      const myData = await fetchMyAttendanceRequests(storeId);
+      if (myData.storeHasStoreManager != null) {
+        storeHasManager = myData.storeHasStoreManager;
+      } else if (myData.store_has_store_manager != null) {
+        storeHasManager = myData.store_has_store_manager;
+      }
+      const mine = (myData.requests ?? []).map((row) => {
+        const req = mapAttendanceRequestToLeaveRequest(row, {
+          applicantId: user.id,
+          applicantName: user.name,
+        });
+        return {
+          ...req,
+          shifts: enrichShiftBindingsFromSchedule(req.shifts, publishedScheduleByDate),
+        };
+      });
+      setMyAttendanceRequests(mine);
+
+      const isManager = user.storeManagerStoreIds.includes(storeId);
+      const isDeputy = user.deputyManagerStoreIds.includes(storeId);
+      if (isManager || isDeputy) {
+        const approvalData = await fetchPendingApprovalAttendanceRequests(storeId);
+        if (approvalData.storeHasStoreManager != null) {
+          storeHasManager = approvalData.storeHasStoreManager;
+        } else if (approvalData.store_has_store_manager != null) {
+          storeHasManager = approvalData.store_has_store_manager;
+        }
+        const approvals = (approvalData.requests ?? []).map((row) => {
+          const req = mapAttendanceRequestToLeaveRequest(row);
+          return {
+            ...req,
+            shifts: enrichShiftBindingsFromSchedule(req.shifts, publishedScheduleByDate),
+          };
+        });
+        setApprovalAttendanceRequests(approvals);
+      } else {
+        setApprovalAttendanceRequests([]);
+      }
+      setSelectedStoreHasStoreManager(storeHasManager);
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      return { ok: false, message };
+    }
+  }, [session?.user, publishedScheduleByDate]);
+
+  const submitAttendanceRequest = useCallback(
+    async (input: SubmitAttendanceInput): Promise<{ ok: boolean; message?: string }> => {
+      const storeId = session?.user.selectedStoreId;
+      if (!storeId) {
+        return { ok: false, message: i18n.t('punchErrorNoStore') };
+      }
+      try {
+        const body = buildAttendanceCreateBody(input);
+        await createAttendanceRequest(storeId, body);
+        await refreshAttendanceRequests();
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : i18n.t('requestSubmitFailed');
+        return { ok: false, message };
+      }
+    },
+    [session?.user.selectedStoreId, refreshAttendanceRequests],
+  );
+
+  const reviewAttendanceRequest = useCallback(
+    async (
+      id: string,
+      approved: boolean,
+      reviewComment?: string,
+    ): Promise<{ ok: boolean; message?: string }> => {
+      const storeId = session?.user.selectedStoreId;
+      if (!storeId) {
+        return { ok: false, message: i18n.t('punchErrorNoStore') };
+      }
+      try {
+        const trimmed = reviewComment?.trim();
+        if (!trimmed) {
+          return { ok: false, message: i18n.t('requestReviewCommentRequired') };
+        }
+        await reviewAttendanceRequestApi(storeId, id, {
+          approved,
+          reviewComment: trimmed,
+        });
+        await refreshAttendanceRequests();
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : i18n.t('requestReviewFailed');
+        return { ok: false, message };
+      }
+    },
+    [session?.user.selectedStoreId, refreshAttendanceRequests],
+  );
+
+  const cancelAttendanceRequest = useCallback(
+    async (id: string): Promise<{ ok: boolean; message?: string }> => {
+      const storeId = session?.user.selectedStoreId;
+      if (!storeId) {
+        return { ok: false, message: i18n.t('punchErrorNoStore') };
+      }
+      try {
+        await cancelAttendanceRequestApi(storeId, id);
+        await refreshAttendanceRequests();
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : i18n.t('requestCancelFailed');
+        return { ok: false, message };
+      }
+    },
+    [session?.user.selectedStoreId, refreshAttendanceRequests],
+  );
 
   const value = useMemo(
     () => ({
@@ -276,15 +812,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       language,
       login,
       logout,
+      sendActivationCode: sendActivationCodeToEmail,
       activateAccount,
       setLanguage,
       changePassword,
       updateProfile,
       setSelectedStore,
+      refreshCurrentEmployee,
       clockEvents,
       punch,
-      addRequest,
-      requests,
+      shiftPunches,
+      getShiftPunch,
+      punchShift,
+      refreshShiftPunchesForDate,
+      isShiftPunchDateLoaded,
+      publishedScheduleByDate,
+      mergePublishedSchedule,
+      requestScheduleContext,
+      setRequestScheduleContext,
+      myAttendanceRequests,
+      approvalAttendanceRequests,
+      selectedStoreHasStoreManager,
+      refreshAttendanceRequests,
+      submitAttendanceRequest,
+      reviewAttendanceRequest,
+      cancelAttendanceRequest,
     }),
     [
       ready,
@@ -292,15 +844,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       language,
       login,
       logout,
+      sendActivationCodeToEmail,
       activateAccount,
       setLanguage,
       changePassword,
       updateProfile,
       setSelectedStore,
+      refreshCurrentEmployee,
       clockEvents,
       punch,
-      addRequest,
-      requests,
+      shiftPunches,
+      getShiftPunch,
+      punchShift,
+      refreshShiftPunchesForDate,
+      isShiftPunchDateLoaded,
+      publishedScheduleByDate,
+      mergePublishedSchedule,
+      requestScheduleContext,
+      setRequestScheduleContext,
+      myAttendanceRequests,
+      approvalAttendanceRequests,
+      selectedStoreHasStoreManager,
+      refreshAttendanceRequests,
+      submitAttendanceRequest,
+      reviewAttendanceRequest,
+      cancelAttendanceRequest,
     ],
   );
 

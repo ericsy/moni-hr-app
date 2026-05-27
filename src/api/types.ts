@@ -1,0 +1,218 @@
+export type ApiLang = 'zh' | 'en';
+
+export type ApiResult<T> = {
+  code: number;
+  message: string;
+  data: T;
+};
+
+export type StoreBrief = {
+  id: number;
+  name: string;
+  /** 该门店是否已配置店长（merchant_store_office.store_manager） */
+  hasStoreManager?: boolean;
+  has_store_manager?: boolean;
+};
+
+/** 员工职位（EmployeeRole）：与存库 code 一致 */
+export type AppEmployeeRole = {
+  code?: string | null;
+  nameZh?: string | null;
+  nameEn?: string | null;
+};
+
+export type AppEmployeeUser = {
+  id: number;
+  merchantId?: number;
+  email: string;
+  /** 手机号（merchant_admin.phone） */
+  phone?: string | null;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+  employeeCode?: string;
+  lastStoreId?: number | null;
+  storeIds?: number[];
+  storeDetails?: StoreBrief[];
+  /** 员工职位（展示名见 nameZh / nameEn） */
+  role?: AppEmployeeRole | null;
+  /** 担任店长的门店（merchant_store_office.store_manager） */
+  storeManagerStores?: StoreBrief[];
+  /** 担任副店长的门店（merchant_store_office.deputy_manager） */
+  deputyManagerStores?: StoreBrief[];
+};
+
+export type AppChangePasswordRequest = {
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type AppLoginResult = {
+  accessToken: string;
+  expiresIn?: number;
+  user: AppEmployeeUser;
+};
+
+export type AppActivationSendCodeRequest = {
+  email: string;
+};
+
+export type AppActivationSendCode = {
+  sent: boolean;
+  retryAfterSeconds?: number;
+};
+
+export type AppActivationRequest = {
+  email: string;
+  code: string;
+  password: string;
+};
+
+export type AppEmployeeScheduleItem = {
+  id: number;
+  areaId: number;
+  areaName: string;
+  shiftId: number;
+  shiftName: string;
+  date_str: string;
+  startTime: string;
+  endTime: string;
+  color?: string | null;
+};
+
+export type AppEmployeePublishedSchedule = {
+  storeId: number;
+  items: AppEmployeeScheduleItem[];
+};
+
+export type AppClockPunchRequest = {
+  publishedCellId: number;
+  punchType: 'clock_in' | 'clock_out';
+  deviceType: 'ios' | 'android';
+  deviceId: string;
+  latitude: number;
+  longitude: number;
+};
+
+export type AppClockPunchResult = {
+  id: number;
+  publishedCellId: number;
+  punchType: string;
+  withinGeofence: boolean;
+  distanceMeters: number;
+  punchedAt: string;
+  /** 打卡时排班快照（重发布后仍可与当前排班按时段匹配） */
+  scheduleDate?: string | null;
+  shiftStartTime?: string | null;
+  shiftEndTime?: string | null;
+  areaName?: string | null;
+  shiftName?: string | null;
+  suspectedProxyPunch?: boolean;
+  proxyPunchReason?: string | null;
+  proxySharedDeviceOtherMerchantAdminIds?: number[] | null;
+};
+
+/** GET /api/v1/app/clock/punches?date=yyyy-MM-dd */
+export type AppClockPunchesByDay = {
+  storeId: number;
+  date: string;
+  punches: AppClockPunchResult[];
+};
+
+export type AppAttendanceLeaveItemRequest = {
+  publishedCellId: number;
+  leaveScope: 'full' | 'partial';
+  partialStartTime?: string;
+  partialEndTime?: string;
+};
+
+export type AppAttendanceRequestCreate = {
+  requestType: 'leave' | 'missed_punch';
+  reason: string;
+  leaveItems?: AppAttendanceLeaveItemRequest[];
+  publishedCellId?: number;
+  punchType?: 'clock_in' | 'clock_out';
+  actualPunchedAt?: string;
+};
+
+export type AppAttendanceLeaveItem = {
+  id?: number;
+  publishedCellId: number;
+  leaveScope?: string;
+  /** full | late_in | early_out；partial 提交时由服务端计算 */
+  leaveEffect?: 'full' | 'late_in' | 'early_out' | string;
+  partialStartTime?: string | null;
+  partialEndTime?: string | null;
+  scheduleDate?: string;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
+};
+
+export type AppAttendanceRequest = {
+  id: number;
+  storeId: number;
+  requestType: string;
+  status: string;
+  reason: string;
+  approverMerchantAdminId?: number;
+  approverKind?: string;
+  submittedAt?: string;
+  reviewedAt?: string | null;
+  reviewComment?: string | null;
+  publishedCellId?: number | null;
+  punchType?: string | null;
+  actualPunchedAt?: string | null;
+  /** 漏打卡：关联 publishedCellId 的排班日期 */
+  scheduleDate?: string | null;
+  /** 漏打卡：班次开始/结束 HH:mm */
+  shiftStartTime?: string | null;
+  shiftEndTime?: string | null;
+  applicantMerchantAdminId?: number;
+  applicantName?: string;
+  leaveItems?: AppAttendanceLeaveItem[];
+};
+
+export type AppAttendanceRequestList = {
+  storeId: number;
+  /** 当前门店是否已有店长（副店长是否展示审批分栏依赖此字段） */
+  storeHasStoreManager?: boolean;
+  store_has_store_manager?: boolean;
+  requests: AppAttendanceRequest[];
+};
+
+export type AppAttendanceRequestReview = {
+  approved: boolean;
+  reviewComment?: string;
+};
+
+export type MerchantEmployeeBrief = {
+  merchantAdminId?: number;
+  firstName?: string;
+  lastName?: string;
+  displayName?: string;
+  employeeCode?: string;
+  email?: string;
+  role?: string;
+};
+
+/** 考勤申请详情（与 Apifox MerchantAttendanceRequest 一致） */
+export type MerchantAttendanceRequest = AppAttendanceRequest & {
+  applicant?: MerchantEmployeeBrief | null;
+  approver?: MerchantEmployeeBrief | null;
+  reviewerMerchantAdminId?: number | null;
+  reviewer?: MerchantEmployeeBrief | null;
+  proxyReviewer?: MerchantEmployeeBrief | null;
+  proxyReview?: boolean | null;
+};
+
+/** 某班次在指定日期的上下班打卡时刻（按排班快照匹配，非 publishedCellId） */
+export type ShiftPunchRecord = {
+  /** 当前格子 id，仅用于展示/提交新打卡 */
+  scheduleId: string;
+  /** 班次身份键：日期 + 起止时刻（+ 区域/班次名） */
+  shiftKey: string;
+  workDate: string;
+  scheduledRange: string;
+  clockInAt?: string;
+  clockOutAt?: string;
+};

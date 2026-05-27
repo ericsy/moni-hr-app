@@ -37,20 +37,6 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="requests"
-        options={{
-          title: t('tabRequests'),
-          tabBarIcon: ({ color, size }) => <Ionicons color={color} name="document-text-outline" size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="clock"
-        options={{
-          title: t('tabClock'),
-          tabBarIcon: ({ color, size }) => <Ionicons color={color} name="time-outline" size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{
           title: t('tabProfile'),

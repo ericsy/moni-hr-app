@@ -38,3 +38,121 @@
 - 排班页布局参考常见「Rosters」应用：顶栏为 **标题 + 选中日期（本地化长格式）+ 门店**；**周区间与年月**居中、两侧切周；**回到今天**（主按钮）与 **我的排班 / 店铺排班**（描边切换）；下方 **七日等宽**日期格（选中 **蓝底白字**），班次仅在下方面板展示；空状态为 **日历图标 + 文案**；移除原横向宽 chip 内嵌班次与顶部分段控件；删除未再使用的 `flattenStoreSlotsForDay`；新增 i18n `scheduleGoToday`、`scheduleViewStore`、`scheduleViewMy`。
 - 排班日历：**有班日**在日期数字下方显示 **绿色圆点**（`dayHasWork`：我的模式看 `MY_SHIFTS`，店铺模式看当前门店日 roster）；选中/未选中均显示，保持格高对齐用占位条。
 - 漏打卡申请（一天多时段）：`LeaveRequest` 增加 `missed_punch` + `missedPunch`（绑定 `workDate` + `slotIndex` + 区域/班次/计划时段 + 漏打 in/out + 实际时间）；演示排班提取至 `src/data/demoMyShifts.ts`；申请页新建时可选排班段；i18n 漏打卡文案。
+- 申请入口方案 A：从底部 Tab 移除「申请」；`app/(main)/requests.tsx` 作为 Stack 子页（系统返回 + 标题栏「新建申请」）；排班页标题右侧 **「剪贴板图标 + 申请」** 描边按钮进入申请，**待审批数** 红色角标；底部 Tab 为 **排班 / 打卡 / 我的**。
+- 打卡页左上角标题改为 **「打卡」**（复用 `tabClock`，不再使用「上下班打卡」）。
+- 底部 Tab 移除「打卡」；打卡仅在排班班次卡片上操作。
+- 登录页移除副标题「新西兰 · 澳大利亚 · 中国门店排班」及 `tagline` 文案。
+- 登录页布局：顶区浅蓝氛围、内容垂直居中；品牌与表单合并为单卡片（图标 + Moni HR + 登录副标题 + 分隔线 + 表单）；演示说明移至卡片外信息条；账户激活链在卡片底部分隔线下方。
+- 登录页右上角增加 **中 / En** 语言切换（`setLanguage`，与「我的」页一致并持久化）。
+- API 对接（`http://3.80.125.254`）：`POST /api/v1/app/auth/login`（邮箱+密码）、`POST /api/v1/app/auth/logout`、`GET /api/v1/app/auth/me`（恢复会话）、`PUT /api/v1/app/auth/last-store`（切换门店）；`src/api/*` + `AuthContext` 存 JWT；请求头 `Authorization` + `X-Lang`；iOS/Android 允许 HTTP 明文。
+- 排班页下拉刷新：调用 `refreshCurrentEmployee` → `GET /api/v1/app/auth/me`，更新姓名/邮箱/工号与 `storeDetails` 门店列表；若当前选中门店仍在列表中则保持选中。
+- 登录页「记住我」：勾选且登录成功后邮箱/密码写入 `AsyncStorage`（`rememberLogin.ts`）；下次打开自动填充；取消勾选并登录成功则清除本地保存。
+- `AppEmployeeUser.phone` 映射至个人信息；个人页摘要展示手机号；下拉刷新 `GET /api/v1/app/auth/me` 同步员工/门店/邮箱/手机（`refreshCurrentEmployee`）。
+- 修复：退出登录不再 `router.replace('/login')`，仅 `logout()` 清会话，由 `(main)/_layout` 统一 `Redirect`，避免登录页跳转两次。
+- 样式：排班页切换门店按钮——店名与下拉箭头统一行高、图标容器居中，修正 Android 上未对齐问题。
+- 登录/me 员工对象增加职位双语字段：`AppEmployeeUser.roleTitleZh` / `roleTitleEn`（及可选 `storeManager`）；兼容 `role_title_zh` / `role_title_en` / `store_manager`。`User` 同步 `roleTitleZh` / `roleTitleEn`；`mapApiRoleToUserRole` 优先 `storeManager`，否则弱推断店长。个人页「角色」按当前 App 语言 `getUserRoleTitle`，无接口文案时回退 `roleStaff` / `roleManager`。
+- 登录/me：`storeManagerStores`、`deputyManagerStores` 映射为 `User.managedStoreIds`；仅当**当前选中门店**在该列表中时显示「店铺排班」切换；`role` 按 Apifox 使用 `code` / `nameZh` / `nameEn`（职位展示，与门店管理权限分离）。
+- 登录/me 的 **`role`** 字段：支持字符串或对象（`zh`/`en`、`nameZh`/`nameEn`、`titleZh`/`titleEn`、`name`/`title`/`label` 等）；归一化时 **优先** 写入 `roleTitleZh`/`roleTitleEn`，个人页展示与店长推断均会用到。
+- 修改密码：对接 `PUT /api/v1/app/auth/password`（`currentPassword` / `newPassword`，Bearer + `X-Lang`）；成功提示与「记住我」本地密码同步（同邮箱时）。
+- 打卡：`POST /api/v1/app/clock/punch`（Bearer + `X-Store-Id`）；`publishedCellId` 为排班格子 id；`deviceType`/`deviceId` 来自 `expo-constants`；定位 `expo-location`；成功后用 `punchedAt` 更新本地班次打卡状态；围栏外/代打卡提示可选 Alert；`app.json` 增加 `expo-location` 插件与用途说明；班次卡片时间窗与接口一致（上班：开始前 10 分钟至下班；下班：结束后 20 分钟内）。
+- 全局 **401**：`apiRequest` 识别 HTTP/body `code` 401；已带 Token 时先按当前语言弹窗「登录已失效」（`sessionExpiredAlert` + i18n），用户点确定后清除会话并跳转登录；登录页本身不单独校验 Token；冷启动 `me` 401 同样弹窗后清会话。
+- 排班「我的排班」：每条班次卡片内嵌状态、上班/下班打卡、申请（漏打卡/调班/请假）；顶栏改为「申请记录」；申请页支持路由参数预填班次；打卡 Tab 改为今日班次汇总 + 跳转排班。
+- 班次卡片：打卡与申请按钮移至卡片**右侧**纵向排列，左侧为时段/区域/班次/状态。
+- 班次卡片内不再显示「今天」角标（日期已在顶栏/日历选中体现）。
+- 排班页「我的排班」卡片：去掉接口 `color` 字段渲染的左侧色条（易显示为黄边，与 App 白底蓝点缀风格不一致）。
+- 排班页「我的排班」对接 `GET /api/v1/app/schedule/published`：请求头 `Authorization`、`X-Lang`、`X-Store-Id`（当前选中门店）；Query `from`/`to` 为当前周周一至周日；按 `date_str` 分组展示区域名、班次名、时段；切换周/门店、下拉刷新时重新拉取；店铺排班仍为演示数据。
+
+## 2026-05-21
+
+- 申请：移除调班类型；新建与班次卡片申请菜单仅保留「请假」「漏打卡」；演示数据去掉调班示例。
+- 新建申请：请假开始/结束改为 `DateSelectField`（周历弹窗选日）；漏打卡工作日期同组件；实际打卡时间改为 `TimeSelectField`（时/分滚轮选择）；结束日期不得早于开始日期。
+- 申请记录页：移除顶栏「新建申请」；仅保留列表；新建仍从排班班次「申请」进入（弹窗标题为请假/漏打卡，不再切换类型）。
+- 请假申请：改为绑定排班时段（`RequestShiftBinding`），与漏打卡一致；取消开始/结束日期区间；表单展示班次日期（只读）+ 可选排班段 + 事由。
+- 请假申请：支持一次勾选**多天、多段**排班（按周加载排班、复选框多选）；`shifts[]` 存储；列表展示日期跨度与各段明细；漏打卡仍为单段。
+
+- 打卡记录：对接 `GET /api/v1/app/clock/punches?date=yyyy-MM-dd`（Bearer + `X-Store-Id`）；`mapPunchesByPublishedCell` 按 `publishedCellId` 聚合 `clock_in`/`clock_out`；`refreshShiftPunchesForDate` 写入班次打卡状态；排班页切换日期/门店、下拉刷新、打卡成功后拉取当日记录驱动 `MyShiftCard` 状态与按钮；切换门店清空本地打卡缓存。
+- 打卡记录页：`/(main)/punch-records`（排班顶栏「打卡记录」入口，携带当前选中日期）；周/日切换、下拉刷新；**按班次分组**展示（区域·班次·时段 + 上班/下班两行）；有排班无打卡显示「未上班/未下班打卡」；仅有打卡无排班仍单独成组；`buildShiftPunchGroups` 聚合逻辑。
+- 打卡记录：已打卡的下班行改为绿色高亮（与上班蓝色区分）；`punchType` 归一化支持 `clock-out` 等写法。
+
+## 2026-05-20
+
+- 修改密码页：补充 `loadRememberLogin` / `saveRememberLogin` 导入；移除未使用的 `hint` 样式。
+- i18n：新增 `passwordFieldsRequired`、`passwordMismatch`、`passwordChangeFailed`；`passwordUpdated` 去掉「演示」表述（中英）。
+- 修改密码页返回按钮：iOS 默认取上一屏路由段名 `(tabs)`；在 `change-password` 设置 `headerBackTitle: profileTitle`（与「我的」页标题「个人信息」/ Profile 一致），与申请页 `headerBackTitle: tabSchedule` 做法相同。
+- 打卡时间 UI：新增 `serverClock`（HTTP `Date` 头 + `performance.now` 锚点推算「当前」），减轻用户改手机系统时间导致的「今天」与打卡按钮时间窗误判；`apiRequest` 在收到响应后同步；打卡成功再用 `punchedAt` 校准；排班页 `todayIso` /「今天」跳转、班次卡片 `getShiftCardActions`、申请页默认日期使用该推算时间。无锚点前仍用本机时间；若网关不返回 `Date` 头则依赖首次成功响应或打卡结果校准。
+- 本机时间校验：同步服务器时间时若 `|server - Date.now()| ≥ 2 分钟`，本会话内弹窗一次（`deviceClockSkew*` i18n），建议用户开启系统自动时间；登出 / 清会话时 `resetServerClockState` 重置锚点与提示标记。与「门店时区」无关（比较的是 UTC 绝对时刻）；门店当地展示仍依赖接口时区字段（若有）。
+
+## 2026-05-21
+
+- 请假多选 UI（`requests.tsx`）：去掉整周纵向 checkbox 列表，改为与排班页一致的交互——顶部已选摘要条（可「清空」）、周导航（`3 – 9` + 年月）、七日等宽日期条（蓝底选中、已选数量角标、有班绿点）、下方仅展示**当前选中日期**的班次卡片（时段大号 + 区域/班次 + 圆形勾选）；单日支持「全选当日 / 取消当日」。i18n：`leaveClearSelection`、`leaveSelectAllDay`、`leaveClearDay`。
+- 排班打卡提示：`AuthContext` 增加 `isShiftPunchDateLoaded`（按日标记接口是否已成功返回）；`getShiftCardActions` 在今日/过去日未拉取打卡前 `showStatus: false` 且不展示上/下班按钮、不强调漏打卡；`MyShiftCard` 仅在 `showStatus` 时渲染提示条，避免先闪「打卡不完整」。
+- 漏打卡时间选择：`TimeSelectField` 改为点击后底部弹窗 + 自研时/分滚轮（`ScrollView` 吸附，不依赖 `@react-native-community/datetimepicker`）；切换上班/下班时默认对齐排班开始/结束（`hmFromShiftRange`、`wheelAnchor`）。
+- 排班班次卡片：上/下班打卡均已完成时隐藏「申请」按钮（`getShiftCardActions` `showApply: false`）；未来日期仍可申请请假。
+- `MyShiftCard` 打卡状态提示：`statusRow` 使用 `alignSelf: 'flex-start'`，背景宽度随文案收缩；长文案仍在卡片宽度内换行。
+- 新建漏打卡弹窗：移除标题「漏打卡」下方的 `missedPunchHint` 说明文字。
+- 请假/漏打卡弹层：点击上方半透明背景可关闭（`modalBackdropTap`）。
+- 请假/漏打卡弹层：表单可滚动、取消/提交按钮固定在白色面板底部，去掉 ScrollView 下方灰色空白与按钮割裂感。
+- 请假弹层：移除「已选 N 段班」下方的 `leaveMultiHint` 说明文字。
+- 修改密码：按 Apifox 修正为 `PUT /api/v1/app/auth/password`，请求体字段 `currentPassword` + `newPassword`（原误用 POST `/change-password` 与 `oldPassword`）。
+- 修改密码页：提交前校验新密码不少于 8 位（`passwordMinLength`）。
+- 请假：仅选 **1 段**排班时可选「整段班次 / 部分时段」；部分时段用起止时间选择（须在排班时间内），便于中途提前离开；`LeaveRequest.leaveTime`；申请列表展示时段。
+- 请假弹层：移除部分时段「结束时间」下方的说明文字（`leavePartialHint`）。
+- 请假弹层：部分时段「开始 / 结束时间」改为一行并排展示。
+- 申请记录：当前门店**店长**或满足条件的**副店长**（无店长任职或有待审批）显示「审批记录 / 申请记录」分栏；审批列表可通过/驳回；普通员工仅看本人申请；`LeaveRequest` 增加 `applicantId` / `storeId`；排班页角标改为待审批数量（管理者）。
+- 考勤申请对接 Apifox AppAttendance：`GET/POST /api/v1/app/attendance/requests`、`GET pending-approval`、`POST {id}/review`；`src/api/attendance.ts`、`mapAttendanceRequest.ts`；提交请假/漏打卡、列表刷新、审批；移除本地演示申请数据。
+- 副店长审批分栏：`storeHasStoreManager`（`storeDetails` / 考勤列表）；有店长时仅当存在待审批或已审批记录才显示「审批记录」，无店长时始终显示；否则仅「申请记录」。
+- 考勤查询接口对齐 Apifox：漏打卡返回 `scheduleDate`、`shiftStartTime`、`shiftEndTime`；请假子项 `leaveEffect`（full/late_in/early_out）；列表用排班缓存补全区域/班次名。
+- 提交考勤申请：未填原因不再提交占位符「—」，改为必填校验；提交按钮在未填原因时禁用。
+- 请假弹层：换日期点班次时仅 1 段已选则替换原日期（避免误选 2 段导致请假时段消失）；周切换清空选择；清理失效排班 key。
+- 请假弹层「继续」：未选班次时不可点；原因改提交时校验；未选班次时时段预览用当天第一个班次；切换日期同步该时段。
+- 申请弹层主按钮文案：`继续`/`Continue` 改为 `提交`/`Submit`。
+- 同日多班请假：支持每班次单独部分时段（默认 1 小时），一次提交多条 `leaveItems`；跨天多选仍为整段。
+- 请假弹层：取消底部统一时段区；每班次卡片内选整段/部分，整段不显示时间，可混选整段+部分。
+- 请假/漏打卡申请改为独立 Stack 页 `request-create`；`requests` 仅保留申请列表与审批。
+- 部分时段默认改为班次起止时间；切换日期后保留各班次已设请假时间（`partialLeaveByKey` 不随聚焦日重置）。
+- 申请记录页：Tab 并入列表，页头以下整屏可下拉刷新；去掉刷新时「正在加载」文字，仅保留转圈。
+- 请假申请：展示班次打卡时间；上下班打卡已覆盖计划时段的班次不可选（`shiftLeaveEligibility`）。
+- 覆盖判断：上班打卡允许相对计划开始迟到 30 分钟内仍视为已覆盖（`LATE_CLOCK_IN_GRACE_MINUTES`）。
+- 请假申请：切换日期选班改为累加保留，不再因跨日点选而清空此前已选日期。
+- `TimeSelectField`：滚轮仅在打开时同步 scrollTo，修复反复滑动卡顿与确定按钮无法点击。
+- `TimeSelectField`：移除 sheet 上 `onStartShouldSetResponder`（会拦截滚轮触摸）；滚轮列用 `localIndex` + 松手后再同步父状态，恢复可滑动。
+- `TimeSelectField`：滚轮改为 `FlatList` + 仅惯性结束更新草稿；去掉滚动中 `setState`/`scrollTo` 对抗；遮罩 `absoluteFill` + 底部 sheet 分层，修复卡顿与确定/取消不可点。
+- 新建申请页：请假/漏打卡原因改为选填（去掉提交前必填校验）；`KeyboardAvoidingView` + 键盘内边距与聚焦时滚到底部，避免输入原因时键盘遮挡。
+- 新建申请页：原因标签恢复为「原因」，不再显示「选填」字样。
+- 新建申请页：去掉 `KeyboardAvoidingView` 与聚焦 `scrollToEnd`，修复点原因输入后表单被顶没、只剩底部按钮；`ScrollView` 用 `flex:1` + `automaticallyAdjustKeyboardInsets`；Android 配置 `softwareKeyboardLayoutMode: resize`。
+- 新建申请页：聚焦原因时按键盘高度计算滚动偏移，使原因输入框完整露在键盘与底部按钮之上。
+- 依赖：移除未安装且未使用的 `@react-native-community/datetimepicker`，修复 `expo start` 报错。
+- 漏打卡：同一日期、同一排班班次、同一漏打类型（上班/下班）在待审批或已通过时不可重复申请；被拒绝后可再申请（`missedPunchEligibility` + `request-create` 校验）。
+- 请假/漏打卡原因：提交时 `normalizeSubmitReason` 过滤空内容与 `…` 占位；原因输入框去掉 `…` placeholder，未填则不提交占位字符。
+- 排班卡片：该班次上班、下班漏打卡均已有待审批/已通过申请时，申请菜单不再显示「漏打卡」（仍可请假）；`isMissedPunchFullyBlockedForShift`。
+- 请假：若待审批/已通过的上下班漏打卡申请时间覆盖计划班次（规则同实打卡覆盖），不可再请该班假；排班卡隐藏「请假」入口。
+- 排班卡：已提交上下班漏打卡申请后，状态改为「漏打卡申请已提交，等待审批」，不再提示「打卡不完整，请提交漏打卡申请」。
+- 请假：同一班次已有待审批/已通过请假（含整段）时不可重复申请；排班卡显示「请假申请已提交，等待审批」并隐藏请假入口。
+- 漏打卡：该班次已有待审批/已通过的全时段请假时，不可再提交漏打卡申请。
+- 申请记录：新增详情页 `request-detail`，对接 `GET /api/v1/app/attendance/requests/{id}`；列表卡片可点击进入；审批入口保留底部通过/驳回。
+- 申请撤回：详情页（本人申请、待审批）可调用 `POST /api/v1/app/attendance/requests/{id}/cancel`；状态 `cancelled` 展示为「已撤回」。
+- 排班页顶栏：打卡/申请入口移至标题下方并排双按钮，保留完整「打卡记录/申请记录」文案，避免与标题抢宽被截断。
+- 排班页顶栏：入口改为轻量文字链接（图标+完整文案+箭头），去掉大按钮样式。
+- 审批申请：通过/驳回均需填写 `reviewComment`；`AttendanceReviewPrompt` 底部弹窗（iOS/Android）；`AuthContext` 提交前校验非空；申请列表与详情页共用。
+- 新建申请页：键盘弹出时原因输入不被遮挡——`KeyboardAvoidingView`（iOS）+ 底部栏随键盘上移（Android edge-to-edge）+ 滚动区底部留白随键盘增高。
+- 修复：Android 新建申请写原因时键盘展开白屏——去掉底栏 `marginBottom` 与过大 `paddingBottom`/`scrollToEnd`；Android 依赖 `resize` 缩窗，改为滚到原因区域坐标。
+- 修复：Android 写原因仍被键盘遮挡——edge-to-edge 下检测是否已 resize；未缩窗时底栏 `marginBottom` 随键盘抬高，并按可视高度滚动原因入屏（不把键盘高度叠进 content padding）。
+- 新建申请页键盘（Expo Go 可用）：移除 `keyboard-controller`/`reanimated`（Expo Go 无原生模块会崩溃）；Android 底栏 `position:absolute` + `bottom:键盘高度`，iOS `KeyboardAvoidingView`；聚焦原因时按可视高度滚动；`edgeToEdgeEnabled: false` 以利 `resize`。
+- 新建申请 Android 键盘：取消仅抬高底栏；页面 `paddingBottom` 缩窗 + `measureInWindow` 将原因输入滚到键盘与底栏之上。
+- 新建申请 Android 键盘：底栏可被输入法覆盖；仅滚动使原因输入框露在键盘上方（iOS 仍避让底栏）。
+- 应用从后台回到前台：`useRefreshOnAppForeground` 在屏幕聚焦时刷新当前页数据（排班/个人/申请列表/打卡记录/申请详情/新建申请）。
+- 排班页：顶栏并入 `ScrollView`，下拉刷新区域覆盖标题至 Tab Bar 上方整页。
+- 排班页 iOS：`ScrollView` 增加 `flexGrow:1`、`alwaysBounceVertical`，内容不足一屏时 Tab Bar 上方空白区也可下拉刷新。
+- 日期本地化：Android `Intl` 中文月份/星期不可靠，改用 i18n 月份列表 + `localeDateFormat`（排班、打卡记录、新建请假周条）。
+- 请假：班次已有上班或下班打卡，或有待审批/已通过的漏打卡申请时，不可选择整段班次请假（仍可部分时段请假）；`leaveRequestEligibility` + 新建申请页禁用整段选项并校验提交；i18n `leaveFullShiftBlocked`。
+- 打卡：成功后仅提示「打卡成功」，不再向用户展示代打卡/围栏复核类后台标记；打卡记录页移除「设备待复核」「围栏外」标签。
+
+## 2026-05-25
+
+- 账户激活：对接 `POST /api/v1/app/auth/activation/send-code` 与 `POST /api/v1/app/auth/activation/activate`；激活页支持输入邮箱、发送验证码（60 秒频控倒计时）、4 位邮件验证码与登录密码（≥8 位）；激活成功后自动登录并跳转排班；`auth.ts` / `types.ts` / `AuthContext` / `activate.tsx` / i18n 同步更新。
+- EAS Android 打包：修复 `Install dependencies` 阶段 `npm ci` 失败（`react` / `react-dom` peer 冲突）；补充 `expo-font`、`react-dom` 依赖并更新 `package-lock.json`。
+- Android Release 无法访问 HTTP API：新增 `expo-build-properties`（`usesCleartextTraffic`）与 `plugins/withAndroidHttp.js`（`network_security_config.xml` + Manifest 明文流量配置）；需重新 `eas build` 生成 APK。
+- 修复小米等小屏 Android 上 Stack 页（打卡记录、修改密码、申请记录等）标题与系统状态栏重叠：`(main)/_layout` 统一 `headerStatusBarHeight` + `stackSafeArea`；`app.json` / 根 `StatusBar` 关闭 Android 透明状态栏。
+- 设计：新增 App Logo 草案 `assets/moni-hr-logo-icon.png`（蓝白科技风，M + 排班/考勤意象，与主题色 `#2563EB` 一致）。
+- 班次匹配：排班重发布后 `publishedCellId` 会变；打卡/请假/漏打卡的**展示与互斥判断**改为按快照键 `t:workDate|startTime|endTime`（仅日期+计划时段）匹配；提交打卡/申请仍用**当前**格子 `publishedCellId`；`src/utils/shiftIdentity.ts` + `mapClockPunches`、eligibility、`getShiftPunch`、请假选班 key 等。
+- 修复：`request-create.tsx` 同一作用域重复声明 `found` 导致 SyntaxError。
