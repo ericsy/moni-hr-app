@@ -1,4 +1,6 @@
 import type { AppEmployeeScheduleItem } from './types';
+import { annotateOvernightPairs } from '../utils/overnightShiftPair';
+import type { OvernightRole } from '../utils/overnightShiftPair';
 
 /** 排班页「我的排班」展示用的一条班次 */
 export type MyPublishedShiftSlot = {
@@ -7,6 +9,13 @@ export type MyPublishedShiftSlot = {
   shiftName: string;
   range: string;
   color?: string;
+  isSubstitution?: boolean;
+  substitutionId?: number;
+  /** 跨天夜班：start=首段仅上班，end=末段仅下班 */
+  overnightRole?: OvernightRole;
+  overnightPairCellId?: string;
+  /** 合并展示时段（如 22:00–06:00）；UI 已改为各段显示 slot.range，保留供业务扩展 */
+  overnightDisplayRange?: string;
 };
 
 type RawScheduleItem = AppEmployeeScheduleItem & {
@@ -52,6 +61,8 @@ export function groupPublishedScheduleByDate(
       shiftName: item.shiftName?.trim() || '—',
       range: formatShiftRange(item.startTime, item.endTime),
       color: item.color?.trim() || undefined,
+      isSubstitution: item.isSubstitution === true,
+      substitutionId: item.substitutionId ?? undefined,
     };
 
     if (!byDate[dateKey]) byDate[dateKey] = [];
@@ -62,5 +73,5 @@ export function groupPublishedScheduleByDate(
     byDate[key].sort(compareByStart);
   }
 
-  return byDate;
+  return annotateOvernightPairs(byDate) as Record<string, MyPublishedShiftSlot[]>;
 }

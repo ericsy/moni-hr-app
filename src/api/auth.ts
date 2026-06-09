@@ -3,6 +3,7 @@ import type {
   AppActivationRequest,
   AppActivationSendCode,
   AppActivationSendCodeRequest,
+  AppPasswordResetRequest,
   AppChangePasswordRequest,
   AppEmployeeUser,
   AppLoginResult,
@@ -28,6 +29,24 @@ export function sendActivationCode(body: AppActivationSendCodeRequest) {
 /** POST /api/v1/app/auth/activation/activate — 验证码 + 密码激活，返回与 login 相同 */
 export function activateEmployeeAccount(body: AppActivationRequest) {
   return apiRequest<AppLoginResult>('/api/v1/app/auth/activation/activate', {
+    method: 'POST',
+    auth: false,
+    body,
+  });
+}
+
+/** POST /api/v1/app/auth/password-reset/send-code — 向已激活员工邮箱发送 4 位重置验证码 */
+export function sendPasswordResetCode(body: AppActivationSendCodeRequest) {
+  return apiRequest<AppActivationSendCode>('/api/v1/app/auth/password-reset/send-code', {
+    method: 'POST',
+    auth: false,
+    body,
+  });
+}
+
+/** POST /api/v1/app/auth/password-reset/confirm — 验证码 + 新密码重置 */
+export function confirmPasswordReset(body: AppPasswordResetRequest) {
+  return apiRequest<null>('/api/v1/app/auth/password-reset/confirm', {
     method: 'POST',
     auth: false,
     body,

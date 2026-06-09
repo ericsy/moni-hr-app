@@ -26,17 +26,20 @@ import { MyShiftCard } from '../../../src/components/MyShiftCard';
 import { type RegionKey, type ShiftKey } from '../../../src/data/demoMyShifts';
 import { getActiveStore, useAuth } from '../../../src/context/AuthContext';
 import {
+  getShiftLeaveRequestStatus,
   hasOpenLeaveForShift,
   isMissedPunchBlockedByLeave,
 } from '../../../src/utils/leaveRequestEligibility';
 import {
   getMissedPunchPendingStatus,
+  getShiftMissedPunchOpenStatus,
   isShiftLeaveBlockedByMissedPunch,
 } from '../../../src/utils/missedPunchEligibility';
 import { doesPunchCoverScheduledShift } from '../../../src/utils/shiftLeaveEligibility';
+import { canApplyMissedPunchForShift } from '../../../src/utils/shiftClockWindow';
 import { openShiftRequest } from '../../../src/utils/openShiftRequest';
 import { colors } from '../../../src/theme/colors';
-import { calendarDateKey } from '../../../src/utils/calendarDateKey';
+import { calendarDateKey, normalizeDateKeyOrToday } from '../../../src/utils/calendarDateKey';
 import { useRefreshOnAppForeground } from '../../../src/hooks/useRefreshOnAppForeground';
 import { getApproximateServerNowDate } from '../../../src/utils/serverClock';
 import { countPendingApprovals, shouldSplitRequestViews } from '../../../src/utils/requestApproval';
@@ -214,6 +217,7 @@ export default function ScheduleScreen() {
     refreshCurrentEmployee,
     mergePublishedSchedule,
     getShiftPunch,
+    shiftPunches,
     punchShift,
     refreshShiftPunchesForDate,
     isShiftPunchDateLoaded,
@@ -298,7 +302,23 @@ export default function ScheduleScreen() {
   const loadDayPunches = useCallback(async () => {
     if (!selectedStoreId || !selected) return;
     await refreshShiftPunchesForDate(selected);
-  }, [selectedStoreId, selected, refreshShiftPunchesForDate]);
+    const slots = myShiftsByDate[selected] ?? [];
+    const prevDates = new Set<string>();
+    for (const s of slots) {
+      if (s.overnightRole === 'end' && s.overnightPairCellId) {
+        const [y, m, d] = selected.split('-').map(Number);
+        const prev = new Date(y, m - 1, d);
+        prev.setDate(prev.getDate() - 1);
+        const py = prev.getFullYear();
+        const pm = `${prev.getMonth() + 1}`.padStart(2, '0');
+        const pd = `${prev.getDate()}`.padStart(2, '0');
+        prevDates.add(`${py}-${pm}-${pd}`);
+      }
+    }
+    for (const d of prevDates) {
+      await refreshShiftPunchesForDate(d);
+    }
+  }, [selectedStoreId, selected, refreshShiftPunchesForDate, myShiftsByDate]);
 
   useEffect(() => {
     if (!session?.user || !selectedStoreId) return;
@@ -588,21 +608,48 @@ export default function ScheduleScreen() {
           <View style={styles.list}>
             {myShifts.map((s, slotIndex) => {
               const punch = getShiftPunch(selected, s);
+              const pairPunch =
+                s.overnightRole === 'end' && s.overnightPairCellId
+                  ? shiftPunches.find((p) => p.scheduleId === s.overnightPairCellId)
+                  : undefined;
               const missedPunchPendingStatus = getMissedPunchPendingStatus(
                 myAttendanceRequests,
                 selected,
                 s,
               );
-              const leavePending = hasOpenLeaveForShift(myAttendanceRequests, selected, s);
+              const missedPunchOpen = getShiftMissedPunchOpenStatus(
+                myAttendanceRequests,
+                selected,
+                s,
+              );
+              const leaveRequestStatus = getShiftLeaveRequestStatus(
+                myAttendanceRequests,
+                selected,
+                s,
+              );
+              const leavePending = leaveRequestStatus !== 'none';
               const missedPunchBlockedByLeave = isMissedPunchBlockedByLeave(
                 myAttendanceRequests,
                 selected,
                 s,
               );
+              const shiftWorkDate = normalizeDateKeyOrToday(selected, getApproximateServerNowDate());
+              const missedPunchTooEarly = !canApplyMissedPunchForShift(
+                shiftWorkDate,
+                s.range,
+                punch,
+                todayIso,
+                getApproximateServerNowDate(),
+                s.overnightRole ?? 'normal',
+                pairPunch,
+              );
               const missedPunchApplyBlocked =
-                missedPunchPendingStatus === 'full' || missedPunchBlockedByLeave;
+                missedPunchPendingStatus === 'full' ||
+                missedPunchBlockedByLeave ||
+                missedPunchTooEarly;
               const leaveApplyBlocked =
                 leavePending ||
+                s.isSubstitution === true ||
                 doesPunchCoverScheduledShift(punch, s.range) ||
                 isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, selected, s, s.range);
               const openApply = (type: 'missed_punch' | 'leave') => {
@@ -616,15 +663,21 @@ export default function ScheduleScreen() {
                   workDateIso={selected}
                   todayIso={todayIso}
                   punch={punch}
+                  pairPunch={pairPunch}
                   punchesKnown={punchesKnown}
                   punchBusy={punchBusyId === s.id}
                   missedPunchApplyBlocked={missedPunchApplyBlocked}
                   missedPunchPendingStatus={missedPunchPendingStatus}
-                  leavePending={leavePending}
+                  missedPunchOpen={missedPunchOpen}
+                  leaveRequestStatus={leaveRequestStatus}
                   leaveApplyBlocked={leaveApplyBlocked}
                   onClockIn={() => void runPunch(s.id, 'in')}
                   onClockOut={() => void runPunch(s.id, 'out')}
                   onApplyMissed={() => {
+                    if (missedPunchTooEarly) {
+                      Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
+                      return;
+                    }
                     if (missedPunchBlockedByLeave) {
                       Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
                       return;

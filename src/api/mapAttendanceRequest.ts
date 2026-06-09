@@ -15,10 +15,11 @@ import {
   identityFromLeaveItem,
   identityFromMissedPunchRow,
 } from '../utils/shiftIdentity';
+import { shiftSelectionKeyFromBinding } from '../utils/requestShiftBinding';
 
 function normalizeStatus(raw: string): LeaveRequest['status'] {
   const s = raw?.toLowerCase() ?? '';
-  if (s === 'approved') return 'approved';
+  if (s === 'approved' || s === 'reviewed') return 'approved';
   if (s === 'rejected') return 'rejected';
   if (s === 'cancelled' || s === 'canceled') return 'cancelled';
   return 'pending';
@@ -135,6 +136,24 @@ function leaveDateSpan(shifts: RequestShiftBinding[]): { start: string; end: str
   return { start: sorted[0], end: sorted[sorted.length - 1] };
 }
 
+/** 与后端约定：显式 shift 为按班次；否则有请假起止日时按「按日期请假」处理（避免 leaveMode 缺省仍带出 leaveItems 导致列表显示段数）。 */
+function resolveLeaveModeForRow(
+  row: AppAttendanceRequest,
+  type: ReturnType<typeof normalizeRequestType>,
+): 'shift' | 'date_range' {
+  if (type !== 'leave') return 'shift';
+  const raw = String(row.leaveMode ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+  if (raw === 'date_range' || raw === 'daterange') return 'date_range';
+  if (raw === 'shift') return 'shift';
+  const from = row.leaveDateFrom?.trim();
+  const to = row.leaveDateTo?.trim();
+  if (from && to) return 'date_range';
+  return 'shift';
+}
+
 function mapLeaveTimeFromItems(items: AppAttendanceLeaveItem[]): LeaveTimeSpan | undefined {
   if (items.length !== 1) return undefined;
   const item = items[0];
@@ -211,10 +230,13 @@ export function mapAttendanceRequestToLeaveRequest(
   options?: { applicantId?: string; applicantName?: string },
 ): LeaveRequest {
   const type = normalizeRequestType(row.requestType);
+  const leaveMode = resolveLeaveModeForRow(row, type);
   const leaveItems = row.leaveItems ?? [];
 
   const shifts =
-    type === 'leave'
+    type === 'leave' && leaveMode === 'date_range'
+      ? []
+      : type === 'leave'
       ? leaveItems.map((item, idx) => mapLeaveItemToBinding(item, idx))
       : (() => {
           const binding = mapMissedPunchBinding(row);
@@ -223,7 +245,9 @@ export function mapAttendanceRequestToLeaveRequest(
 
   const missedWorkDate = shifts[0]?.workDate ?? '';
   const span =
-    type === 'missed_punch' && missedWorkDate
+    type === 'leave' && leaveMode === 'date_range' && row.leaveDateFrom && row.leaveDateTo
+      ? { start: String(row.leaveDateFrom).slice(0, 10), end: String(row.leaveDateTo).slice(0, 10) }
+      : type === 'missed_punch' && missedWorkDate
       ? { start: missedWorkDate, end: missedWorkDate }
       : leaveDateSpan(shifts);
   const punchKind =
@@ -233,6 +257,7 @@ export function mapAttendanceRequestToLeaveRequest(
   return {
     id: String(row.id),
     type,
+    leaveMode,
     applicantId:
       options?.applicantId ??
       (row.applicantMerchantAdminId != null ? String(row.applicantMerchantAdminId) : undefined),
@@ -267,7 +292,9 @@ export function buildLeaveItemsPayload(
   const { leaveTime, leaveTimesByScheduleKey } = options ?? {};
   return shifts.map((shift) => {
     const cellId = Number(shift.scheduleId);
+    const selectionKey = shiftSelectionKeyFromBinding(shift);
     const span =
+      leaveTimesByScheduleKey?.[selectionKey] ??
       leaveTimesByScheduleKey?.[shift.shiftKey ?? `${shift.workDate}|${shift.scheduleId ?? ''}`] ??
       (shifts.length === 1 ? leaveTime : undefined);
     const partial = span?.mode === 'partial' && span.from && span.to;
@@ -275,6 +302,9 @@ export function buildLeaveItemsPayload(
       publishedCellId: cellId,
       leaveScope: partial ? 'partial' : 'full',
     };
+    if (!Number.isFinite(cellId) || cellId <= 0) {
+      throw new Error('Invalid schedule cell id');
+    }
     if (partial) {
       item.partialStartTime = span.from;
       item.partialEndTime = span.to;
@@ -286,6 +316,14 @@ export function buildLeaveItemsPayload(
 export type SubmitAttendanceInput =
   | {
       type: 'leave';
+      mode: 'date_range';
+      reason: string;
+      leaveDateFrom: string;
+      leaveDateTo: string;
+    }
+  | {
+      type: 'leave';
+      mode?: 'shift';
       reason: string;
       shifts: RequestShiftBinding[];
       /** 单段请假（兼容） */
@@ -303,9 +341,19 @@ export type SubmitAttendanceInput =
     };
 
 export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAttendanceRequestCreate {
+  if (input.type === 'leave' && input.mode === 'date_range') {
+    return {
+      requestType: 'leave',
+      leaveMode: 'date_range',
+      leaveDateFrom: input.leaveDateFrom,
+      leaveDateTo: input.leaveDateTo,
+      reason: normalizeSubmitReason(input.reason),
+    };
+  }
   if (input.type === 'leave') {
     return {
       requestType: 'leave',
+      leaveMode: 'shift',
       reason: normalizeSubmitReason(input.reason),
       leaveItems: buildLeaveItemsPayload(input.shifts, {
         leaveTime: input.leaveTime,
@@ -313,11 +361,22 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
       }),
     };
   }
+  const shift = input.shift;
+  const overnightPairCellId =
+    shift.overnightPairCellId != null ? Number(shift.overnightPairCellId) : undefined;
+  const overnightRole =
+    shift.overnightRole === 'start' || shift.overnightRole === 'end'
+      ? shift.overnightRole
+      : undefined;
   return {
     requestType: 'missed_punch',
     reason: normalizeSubmitReason(input.reason),
-    publishedCellId: Number(input.shift.scheduleId),
+    publishedCellId: Number(shift.scheduleId),
     punchType: input.punchKind === 'out' ? 'clock_out' : 'clock_in',
     actualPunchedAt: toAttendanceDateTimeIso(input.workDate, input.proposedTime),
+    ...(overnightPairCellId != null && Number.isFinite(overnightPairCellId)
+      ? { overnightPairCellId }
+      : {}),
+    ...(overnightRole ? { overnightRole } : {}),
   };
 }

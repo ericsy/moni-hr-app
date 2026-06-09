@@ -13,14 +13,18 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { fetchAttendanceRequestDetail } from '../../src/api/attendance';
+import {
+  fetchAttendanceRequestDetail,
+  fetchSubstituteCandidates,
+  type SubstituteCandidate,
+} from '../../src/api/attendance';
 import { ApiError } from '../../src/api/client';
 import {
   formatEmployeeBrief,
   mapAttendanceRequestDetail,
   type AttendanceRequestDetail,
 } from '../../src/api/mapAttendanceRequest';
-import type { AppAttendanceLeaveItem } from '../../src/api/types';
+import type { AppAttendanceLeaveItem, LeaveSubstitutionReviewItem } from '../../src/api/types';
 import { AttendanceReviewPrompt } from '../../src/components/AttendanceReviewPrompt';
 import { useAuth } from '../../src/context/AuthContext';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
@@ -77,6 +81,14 @@ export default function RequestDetailScreen() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewTarget, setReviewTarget] = useState<{ approved: boolean } | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [substituteIdByLeaveItem, setSubstituteIdByLeaveItem] = useState<Record<string, string>>({});
+  const [substituteCandidatesByLeaveItem, setSubstituteCandidatesByLeaveItem] = useState<
+    Record<string, SubstituteCandidate[]>
+  >({});
+  const [substituteCandidatesLoading, setSubstituteCandidatesLoading] = useState<
+    Record<string, boolean>
+  >({});
+  const [substitutePickerOpenFor, setSubstitutePickerOpenFor] = useState<string | null>(null);
 
   const showApprovalActions = params.approval === '1';
   const requestId = params.id ?? '';
@@ -95,7 +107,21 @@ export default function RequestDetailScreen() {
       setError(null);
       try {
         const row = await fetchAttendanceRequestDetail(storeId, requestId);
-        setDetail(mapAttendanceRequestDetail(row));
+        const mapped = mapAttendanceRequestDetail(row);
+        setDetail(mapped);
+        if (
+          mapped.type === 'leave' &&
+          mapped.status === 'pending' &&
+          mapped.leaveMode !== 'date_range'
+        ) {
+          const next: Record<string, string> = {};
+          for (const item of mapped.leaveItemsDetail ?? []) {
+            if (item.id != null) next[String(item.id)] = '';
+          }
+          setSubstituteIdByLeaveItem(next);
+        } else {
+          setSubstituteIdByLeaveItem({});
+        }
       } catch (e) {
         const message = e instanceof ApiError ? e.message : t('requestDetailLoadFailed');
         setError(message);
@@ -115,10 +141,54 @@ export default function RequestDetailScreen() {
 
   useRefreshOnAppForeground(() => loadDetail({ silent: true }));
 
+  const loadSubstituteCandidates = useCallback(
+    async (leaveItemId: string) => {
+      if (!storeId || !leaveItemId) return;
+      setSubstituteCandidatesLoading((prev) => ({ ...prev, [leaveItemId]: true }));
+      try {
+        const items = await fetchSubstituteCandidates(storeId, { leaveItemId });
+        setSubstituteCandidatesByLeaveItem((prev) => ({ ...prev, [leaveItemId]: items }));
+      } catch {
+        setSubstituteCandidatesByLeaveItem((prev) => ({ ...prev, [leaveItemId]: [] }));
+      } finally {
+        setSubstituteCandidatesLoading((prev) => ({ ...prev, [leaveItemId]: false }));
+      }
+    },
+    [storeId],
+  );
+
+  const buildSubstitutions = (): LeaveSubstitutionReviewItem[] | undefined => {
+    if (!detail?.leaveItemsDetail?.length) return undefined;
+    const items: LeaveSubstitutionReviewItem[] = [];
+    for (const item of detail.leaveItemsDetail) {
+      if (item.id == null) continue;
+      const raw = substituteIdByLeaveItem[String(item.id)]?.trim();
+      if (!raw) continue;
+      const substituteMerchantAdminId = Number(raw);
+      if (!Number.isFinite(substituteMerchantAdminId) || substituteMerchantAdminId <= 0) continue;
+      items.push({
+        leaveItemId: item.id,
+        substituteMerchantAdminId,
+        substituteStartTime: item.partialStartTime || item.shiftStartTime || undefined,
+        substituteEndTime: item.partialEndTime || item.shiftEndTime || undefined,
+      });
+    }
+    return items.length > 0 ? items : undefined;
+  };
+
   const submitReview = async (reviewComment: string) => {
     if (!detail || !reviewTarget) return;
     setReviewBusy(true);
-    const res = await reviewAttendanceRequest(detail.id, reviewTarget.approved, reviewComment);
+    const substitutions =
+      reviewTarget.approved && detail.type === 'leave' && detail.leaveMode !== 'date_range'
+        ? buildSubstitutions()
+        : undefined;
+    const res = await reviewAttendanceRequest(
+      detail.id,
+      reviewTarget.approved,
+      reviewComment,
+      substitutions,
+    );
     setReviewBusy(false);
     if (!res.ok) {
       Alert.alert(t('requestDetailTitle'), res.message ?? t('requestReviewFailed'));
@@ -229,7 +299,11 @@ export default function RequestDetailScreen() {
 
               {detail.type === 'leave' ? (
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>{t('requestDetailLeave')}</Text>
+                  <Text style={styles.sectionTitle}>
+                    {detail.leaveMode === 'date_range'
+                      ? t('dateLeaveTitle')
+                      : t('requestDetailLeave')}
+                  </Text>
                   <View style={styles.row}>
                     <Text style={styles.rowLabel}>{t('requestWorkDate')}</Text>
                     <Text style={styles.rowValue}>
@@ -238,7 +312,12 @@ export default function RequestDetailScreen() {
                         : t('leaveDateSpan', { start: detail.start, end: detail.end })}
                     </Text>
                   </View>
-                  {(detail.leaveItemsDetail ?? []).map((item, idx) => {
+                  {detail.leaveMode === 'date_range' ? (
+                    <Text style={styles.itemMeta}>{t('dateLeaveNoShiftHint')}</Text>
+                  ) : null}
+                  {detail.leaveMode === 'date_range'
+                    ? null
+                    : (detail.leaveItemsDetail ?? []).map((item, idx) => {
                     const workDate = scheduleDateKey(item.scheduleDate) || detail.start;
                     const binding = {
                       workDate,
@@ -268,6 +347,105 @@ export default function RequestDetailScreen() {
                               to: item.partialEndTime!,
                             })}
                           </Text>
+                        ) : null}
+                        {item.substitution?.substituteDisplayName ? (
+                          <Text style={styles.itemMeta}>
+                            {t('substituteLabel')}: {item.substitution.substituteDisplayName} (
+                            {item.substitution.substituteStartTime}–{item.substitution.substituteEndTime})
+                          </Text>
+                        ) : null}
+                        {showApprovalActions && detail.status === 'pending' && item.id != null ? (
+                          <View style={styles.subPickerWrap}>
+                            <Pressable
+                              style={styles.subPickerTrigger}
+                              onPress={() => {
+                                const key = String(item.id);
+                                const nextOpen = substitutePickerOpenFor === key ? null : key;
+                                setSubstitutePickerOpenFor(nextOpen);
+                                if (nextOpen) {
+                                  void loadSubstituteCandidates(key);
+                                }
+                              }}
+                            >
+                              <Text style={styles.subPickerTriggerText}>
+                                {(() => {
+                                  const key = String(item.id);
+                                  const selectedId = substituteIdByLeaveItem[key];
+                                  if (!selectedId) return t('selectSubstitute');
+                                  const found = substituteCandidatesByLeaveItem[key]?.find(
+                                    (c) => String(c.id) === selectedId,
+                                  );
+                                  return found?.name || selectedId;
+                                })()}
+                              </Text>
+                              <Ionicons
+                                name={
+                                  substitutePickerOpenFor === String(item.id)
+                                    ? 'chevron-up'
+                                    : 'chevron-down'
+                                }
+                                size={16}
+                                color={colors.textMuted}
+                              />
+                            </Pressable>
+                            {substitutePickerOpenFor === String(item.id) ? (
+                              <View style={styles.subPickerList}>
+                                {substituteCandidatesLoading[String(item.id)] ? (
+                                  <ActivityIndicator
+                                    color={colors.primary}
+                                    style={styles.subPickerLoading}
+                                  />
+                                ) : (substituteCandidatesByLeaveItem[String(item.id)] ?? []).length === 0 ? (
+                                  <Text style={styles.subPickerEmpty}>{t('substituteNoCandidates')}</Text>
+                                ) : (
+                                  (substituteCandidatesByLeaveItem[String(item.id)] ?? []).map(
+                                    (candidate) => {
+                                      const key = String(item.id);
+                                      const selected =
+                                        substituteIdByLeaveItem[key] === String(candidate.id);
+                                      return (
+                                        <Pressable
+                                          key={String(candidate.id)}
+                                          style={[
+                                            styles.subPickerOption,
+                                            selected && styles.subPickerOptionSelected,
+                                          ]}
+                                          onPress={() => {
+                                            setSubstituteIdByLeaveItem((prev) => ({
+                                              ...prev,
+                                              [key]: String(candidate.id),
+                                            }));
+                                            setSubstitutePickerOpenFor(null);
+                                          }}
+                                        >
+                                          <Text
+                                            style={[
+                                              styles.subPickerOptionText,
+                                              selected && styles.subPickerOptionTextSelected,
+                                            ]}
+                                          >
+                                            {candidate.name}
+                                          </Text>
+                                        </Pressable>
+                                      );
+                                    },
+                                  )
+                                )}
+                                {substituteIdByLeaveItem[String(item.id)] ? (
+                                  <Pressable
+                                    style={styles.subPickerClear}
+                                    onPress={() => {
+                                      const key = String(item.id);
+                                      setSubstituteIdByLeaveItem((prev) => ({ ...prev, [key]: '' }));
+                                      setSubstitutePickerOpenFor(null);
+                                    }}
+                                  >
+                                    <Text style={styles.subPickerClearText}>{t('cancel')}</Text>
+                                  </Pressable>
+                                ) : null}
+                              </View>
+                            ) : null}
+                          </View>
                         ) : null}
                       </View>
                     );
@@ -431,6 +609,40 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 11, fontWeight: '700', color: colors.textMuted },
   rowValue: { marginTop: 2, fontSize: 15, fontWeight: '600', color: colors.text },
   rowValueMultiline: { marginTop: 2, fontSize: 15, fontWeight: '600', color: colors.text, lineHeight: 22 },
+  subPickerWrap: { marginTop: 8 },
+  subPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FAFBFD',
+  },
+  subPickerTriggerText: { fontSize: 14, color: colors.text, flex: 1, marginRight: 8 },
+  subPickerList: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  subPickerLoading: { padding: 12 },
+  subPickerEmpty: { padding: 12, fontSize: 13, color: colors.textMuted },
+  subPickerOption: { paddingHorizontal: 12, paddingVertical: 10 },
+  subPickerOptionSelected: { backgroundColor: '#EEF4FF' },
+  subPickerOptionText: { fontSize: 14, color: colors.text },
+  subPickerOptionTextSelected: { fontWeight: '700', color: colors.primary },
+  subPickerClear: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    padding: 10,
+    alignItems: 'center',
+  },
+  subPickerClearText: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
   itemCard: {
     marginTop: 10,
     padding: 12,

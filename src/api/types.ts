@@ -68,6 +68,12 @@ export type AppActivationRequest = {
   password: string;
 };
 
+export type AppPasswordResetRequest = {
+  email: string;
+  code: string;
+  password: string;
+};
+
 export type AppEmployeeScheduleItem = {
   id: number;
   areaId: number;
@@ -78,6 +84,8 @@ export type AppEmployeeScheduleItem = {
   startTime: string;
   endTime: string;
   color?: string | null;
+  isSubstitution?: boolean;
+  substitutionId?: number | null;
 };
 
 export type AppEmployeePublishedSchedule = {
@@ -128,11 +136,32 @@ export type AppAttendanceLeaveItemRequest = {
 
 export type AppAttendanceRequestCreate = {
   requestType: 'leave' | 'missed_punch';
+  leaveMode?: 'shift' | 'date_range';
+  leaveDateFrom?: string;
+  leaveDateTo?: string;
   reason: string;
   leaveItems?: AppAttendanceLeaveItemRequest[];
   publishedCellId?: number;
   punchType?: 'clock_in' | 'clock_out';
   actualPunchedAt?: string;
+  overnightPairCellId?: number;
+  overnightRole?: 'start' | 'end';
+};
+
+export type ScheduleSubstitutionBrief = {
+  substitutionId?: number;
+  substituteMerchantAdminId?: number;
+  substituteDisplayName?: string;
+  substituteStartTime?: string;
+  substituteEndTime?: string;
+  substitutionStatus?: string;
+};
+
+export type LeaveSubstitutionReviewItem = {
+  leaveItemId: number;
+  substituteMerchantAdminId: number;
+  substituteStartTime?: string;
+  substituteEndTime?: string;
 };
 
 export type AppAttendanceLeaveItem = {
@@ -146,12 +175,16 @@ export type AppAttendanceLeaveItem = {
   scheduleDate?: string;
   shiftStartTime?: string;
   shiftEndTime?: string;
+  substitution?: ScheduleSubstitutionBrief | null;
 };
 
 export type AppAttendanceRequest = {
   id: number;
   storeId: number;
   requestType: string;
+  leaveMode?: 'shift' | 'date_range' | string;
+  leaveDateFrom?: string | null;
+  leaveDateTo?: string | null;
   status: string;
   reason: string;
   approverMerchantAdminId?: number;
@@ -183,6 +216,7 @@ export type AppAttendanceRequestList = {
 export type AppAttendanceRequestReview = {
   approved: boolean;
   reviewComment?: string;
+  substitutions?: LeaveSubstitutionReviewItem[];
 };
 
 export type MerchantEmployeeBrief = {

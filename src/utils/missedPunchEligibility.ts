@@ -113,15 +113,43 @@ export function isShiftLeaveBlockedByMissedPunch(
 
 export type MissedPunchPendingStatus = 'none' | 'partial' | 'full';
 
+export type ShiftMissedPunchOpenStatus = {
+  coverage: 'partial' | 'full';
+  approval: 'pending' | 'approved';
+};
+
+function missedPunchOpenApproval(
+  requests: LeaveRequest[],
+  workDate: string,
+  slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
+  punchKind: 'in' | 'out',
+): 'none' | 'pending' | 'approved' {
+  const req = findOpenMissedPunchRequest(requests, workDate, slotOrTarget, punchKind);
+  if (!req) return 'none';
+  return req.status === 'approved' ? 'approved' : 'pending';
+}
+
 /** 排班卡状态：是否已有待审批/已通过的漏打卡申请 */
 export function getMissedPunchPendingStatus(
   requests: LeaveRequest[],
   workDate: string,
   slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
 ): MissedPunchPendingStatus {
-  const inOpen = hasOpenMissedPunchForShift(requests, workDate, slotOrTarget, 'in');
-  const outOpen = hasOpenMissedPunchForShift(requests, workDate, slotOrTarget, 'out');
-  if (inOpen && outOpen) return 'full';
-  if (inOpen || outOpen) return 'partial';
-  return 'none';
+  const open = getShiftMissedPunchOpenStatus(requests, workDate, slotOrTarget);
+  return open?.coverage ?? 'none';
+}
+
+/** 排班卡展示：漏打卡申请覆盖范围与审批状态 */
+export function getShiftMissedPunchOpenStatus(
+  requests: LeaveRequest[],
+  workDate: string,
+  slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
+): ShiftMissedPunchOpenStatus | undefined {
+  const inApproval = missedPunchOpenApproval(requests, workDate, slotOrTarget, 'in');
+  const outApproval = missedPunchOpenApproval(requests, workDate, slotOrTarget, 'out');
+  if (inApproval === 'none' && outApproval === 'none') return undefined;
+  const coverage = inApproval !== 'none' && outApproval !== 'none' ? 'full' : 'partial';
+  const approval =
+    inApproval === 'pending' || outApproval === 'pending' ? 'pending' : 'approved';
+  return { coverage, approval };
 }

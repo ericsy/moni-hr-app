@@ -28,6 +28,8 @@ type Props = {
   value: string;
   onChange: (hm: string) => void;
   wheelAnchor?: string;
+  /** 提交成功跳转等场景：禁止打开并关闭已打开的滚轮，避免 Android Modal 与路由卸载竞态崩溃 */
+  disabled?: boolean;
 };
 
 type WheelColumnProps = {
@@ -119,6 +121,8 @@ type TimePickerSheetProps = {
   onConfirm: () => void;
 };
 
+const MODAL_UNMOUNT_MS = Platform.OS === 'android' ? 320 : 0;
+
 const TimePickerSheet = memo(function TimePickerSheet({
   visible,
   hour,
@@ -130,11 +134,22 @@ const TimePickerSheet = memo(function TimePickerSheet({
   onConfirm,
 }: TimePickerSheetProps) {
   const { t } = useTranslation();
+  const [mounted, setMounted] = useState(visible);
 
-  if (!visible) return null;
+  useEffect(() => {
+    if (visible) setMounted(true);
+  }, [visible]);
+
+  useEffect(() => {
+    if (visible || !mounted) return;
+    const id = setTimeout(() => setMounted(false), MODAL_UNMOUNT_MS);
+    return () => clearTimeout(id);
+  }, [visible, mounted]);
+
+  if (!mounted) return null;
 
   return (
-    <Modal animationType="slide" transparent visible onRequestClose={onCancel}>
+    <Modal animationType="slide" transparent visible={visible} onRequestClose={onCancel}>
       <View style={styles.overlay}>
         <Pressable style={styles.overlayTap} onPress={onCancel} accessibilityRole="button" />
         <View style={styles.sheet}>
@@ -175,7 +190,7 @@ const TimePickerSheet = memo(function TimePickerSheet({
   );
 });
 
-export function TimeSelectField({ value, onChange, wheelAnchor }: Props) {
+export function TimeSelectField({ value, onChange, wheelAnchor, disabled = false }: Props) {
   const parsed = useMemo(() => parseHm(value), [value]);
   const displayHm = useMemo(() => formatHm(parsed.hour, parsed.minute), [parsed.hour, parsed.minute]);
 
@@ -184,13 +199,18 @@ export function TimeSelectField({ value, onChange, wheelAnchor }: Props) {
   const [draftHour, setDraftHour] = useState(parsed.hour);
   const [draftMinute, setDraftMinute] = useState(parsed.minute);
 
+  useEffect(() => {
+    if (disabled) setVisible(false);
+  }, [disabled]);
+
   const open = useCallback(() => {
+    if (disabled) return;
     const anchor = parseHm(wheelAnchor?.trim() || value);
     setDraftHour(anchor.hour);
     setDraftMinute(anchor.minute);
     setWheelId((id) => id + 1);
     setVisible(true);
-  }, [value, wheelAnchor]);
+  }, [disabled, value, wheelAnchor]);
 
   const close = useCallback(() => setVisible(false), []);
 
@@ -233,7 +253,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#FAFBFD',
   },
-  triggerText: { fontSize: 15, fontWeight: '600', color: colors.text, fontVariant: ['tabular-nums'] },
+  triggerText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+    ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as const } : {}),
+  },
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
@@ -287,7 +312,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: colors.text,
-    fontVariant: ['tabular-nums'],
+    ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as const } : {}),
   },
   wheelSep: {
     fontSize: 24,

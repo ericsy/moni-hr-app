@@ -45,6 +45,19 @@ export function hasOpenLeaveForShift(
   return !!findOpenLeaveRequestForShift(requests, workDate, slotOrTarget);
 }
 
+/** 排班卡展示：该班次关联的待审批/已通过请假状态 */
+export type ShiftLeaveRequestStatus = 'none' | 'pending' | 'approved';
+
+export function getShiftLeaveRequestStatus(
+  requests: LeaveRequest[],
+  workDate: string,
+  slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
+): ShiftLeaveRequestStatus {
+  const req = findOpenLeaveRequestForShift(requests, workDate, slotOrTarget);
+  if (!req) return 'none';
+  return req.status === 'approved' ? 'approved' : 'pending';
+}
+
 /** 该班次在请假申请中是否为整段（单段请假或无法区分时按整段） */
 export function isFullLeaveForShiftInRequest(
   request: LeaveRequest,

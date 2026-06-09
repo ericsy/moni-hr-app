@@ -77,6 +77,45 @@ export function cancelAttendanceRequest(
   );
 }
 
+export type SubstituteCandidate = {
+  id: number | string;
+  name: string;
+};
+
+/** GET /api/v1/app/attendance/substitute-candidates — 当前门店、替班时段内无已发布排班的员工 */
+export function fetchSubstituteCandidates(
+  storeId: string | number,
+  params: {
+    leaveItemId?: string | number;
+    scheduleDate?: string;
+    startTime?: string;
+    endTime?: string;
+    excludeMerchantAdminId?: string | number;
+  },
+) {
+  const q = new URLSearchParams();
+  if (params.leaveItemId != null) q.set('leaveItemId', String(params.leaveItemId));
+  if (params.scheduleDate) q.set('scheduleDate', params.scheduleDate);
+  if (params.startTime) q.set('startTime', params.startTime);
+  if (params.endTime) q.set('endTime', params.endTime);
+  if (params.excludeMerchantAdminId != null) {
+    q.set('excludeMerchantAdminId', String(params.excludeMerchantAdminId));
+  }
+  const qs = q.toString();
+  return apiRequest<{ storeId?: number | string; items?: Array<{ id?: number | string; name?: string }> }>(
+    `/api/v1/app/attendance/substitute-candidates${qs ? `?${qs}` : ''}`,
+    { storeId },
+  ).then((data) => {
+    const items = data?.items ?? [];
+    return items
+      .map((row) => ({
+        id: row.id as number | string,
+        name: (row.name ?? '').trim() || String(row.id ?? ''),
+      }))
+      .filter((row) => row.id != null && row.id !== '') as SubstituteCandidate[];
+  });
+}
+
 /** POST /api/v1/app/attendance/requests/{id}/review */
 export function reviewAttendanceRequest(
   storeId: string | number,

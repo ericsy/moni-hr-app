@@ -28,13 +28,16 @@ import { mapPunchesByPublishedCell } from '../api/mapClockPunches';
 import {
   activateEmployeeAccount,
   changeEmployeePassword,
+  confirmPasswordReset,
   fetchCurrentEmployee,
   loginWithEmail,
   logoutSession,
   sendActivationCode,
+  sendPasswordResetCode,
   updateLastStore,
 } from '../api/auth';
 import {
+  API_INVALID_RESPONSE,
   ApiError,
   configureApiClient,
   configureUnauthorizedHandler,
@@ -140,11 +143,15 @@ export type RequestShiftBinding = {
   areaName: string;
   shiftName: string;
   scheduledRange: string;
+  overnightRole?: 'start' | 'end' | 'normal';
+  overnightPairCellId?: string;
 };
 
 export type LeaveRequest = {
   id: string;
   type: 'leave' | 'missed_punch';
+  /** shift=按班次 date_range=按日期 */
+  leaveMode?: 'shift' | 'date_range';
   /** 提交人（演示/对接审批用） */
   applicantId?: string;
   applicantName?: string;
@@ -180,6 +187,14 @@ type AuthContextValue = {
     email: string,
   ) => Promise<{ ok: boolean; retryAfterSeconds?: number; message?: string; error?: string }>;
   activateAccount: (
+    email: string,
+    code: string,
+    password: string,
+  ) => Promise<{ ok: boolean; error?: string; message?: string }>;
+  sendPasswordResetCode: (
+    email: string,
+  ) => Promise<{ ok: boolean; retryAfterSeconds?: number; message?: string; error?: string }>;
+  resetPasswordWithCode: (
     email: string,
     code: string,
     password: string,
@@ -226,6 +241,7 @@ type AuthContextValue = {
     id: string,
     approved: boolean,
     reviewComment?: string,
+    substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
   ) => Promise<{ ok: boolean; message?: string }>;
   /** 撤回本人待审批申请 */
   cancelAttendanceRequest: (id: string) => Promise<{ ok: boolean; message?: string }>;
@@ -404,7 +420,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await persistAuth({ user }, result.accessToken);
         return { ok: true };
       } catch (e) {
-        const message = e instanceof ApiError ? e.message : undefined;
+        const message =
+          e instanceof ApiError
+            ? e.message === API_INVALID_RESPONSE
+              ? i18n.t('loginErrorInvalidResponse')
+              : e.message
+            : e instanceof TypeError
+              ? i18n.t('loginErrorNetwork')
+              : undefined;
         return { ok: false, error: 'api', message };
       }
     },
@@ -484,6 +507,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     },
     [persistAuth],
   );
+
+  const sendPasswordResetCodeToEmail = useCallback(async (email: string) => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      return { ok: false, error: 'empty_email' as const };
+    }
+    try {
+      const result = await sendPasswordResetCode({ email: trimmed });
+      return {
+        ok: true,
+        retryAfterSeconds: result.retryAfterSeconds ?? 60,
+      };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      if (e instanceof ApiError && e.code === 409) {
+        return { ok: false, error: 'rate_limit' as const, retryAfterSeconds: 60, message };
+      }
+      return { ok: false, error: 'api' as const, message };
+    }
+  }, []);
+
+  const resetPasswordWithCode = useCallback(async (email: string, code: string, password: string) => {
+    const trimmedEmail = email.trim();
+    const trimmedCode = code.trim();
+    if (!trimmedEmail) {
+      return { ok: false, error: 'empty_email' };
+    }
+    if (!/^\d{4}$/.test(trimmedCode)) {
+      return { ok: false, error: 'invalid_code' };
+    }
+    if (password.length < 8) {
+      return { ok: false, error: 'invalid_password' };
+    }
+    try {
+      await confirmPasswordReset({
+        email: trimmedEmail,
+        code: trimmedCode,
+        password,
+      });
+      return { ok: true };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      return { ok: false, error: 'api', message };
+    }
+  }, []);
 
   const setLanguage = useCallback(async (lng: 'en' | 'zh') => {
     setLanguageState(lng);
@@ -763,6 +831,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       id: string,
       approved: boolean,
       reviewComment?: string,
+      substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
     ): Promise<{ ok: boolean; message?: string }> => {
       const storeId = session?.user.selectedStoreId;
       if (!storeId) {
@@ -776,6 +845,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await reviewAttendanceRequestApi(storeId, id, {
           approved,
           reviewComment: trimmed,
+          substitutions: substitutions?.length ? substitutions : undefined,
         });
         await refreshAttendanceRequests();
         return { ok: true };
@@ -814,6 +884,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       sendActivationCode: sendActivationCodeToEmail,
       activateAccount,
+      sendPasswordResetCode: sendPasswordResetCodeToEmail,
+      resetPasswordWithCode,
       setLanguage,
       changePassword,
       updateProfile,
@@ -846,6 +918,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       sendActivationCodeToEmail,
       activateAccount,
+      sendPasswordResetCodeToEmail,
+      resetPasswordWithCode,
       setLanguage,
       changePassword,
       updateProfile,

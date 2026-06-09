@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link, router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   KeyboardAvoidingView,
@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
+import { useScrollInputAboveKeyboard } from '../../src/hooks/useScrollInputAboveKeyboard';
 import { colors } from '../../src/theme/colors';
 import { clearRememberLogin, loadRememberLogin, saveRememberLogin } from '../../src/utils/rememberLogin';
 
@@ -27,6 +28,17 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [credentialsReady, setCredentialsReady] = useState(false);
+  const accountWrapRef = useRef<View>(null);
+  const passwordWrapRef = useRef<View>(null);
+
+  const {
+    scrollRef,
+    contentRef,
+    scrollYRef,
+    keyboardHeight,
+    onFieldFocus,
+    scrollContentPaddingBottom,
+  } = useScrollInputAboveKeyboard({ topChrome: 44 });
 
   useEffect(() => {
     let cancelled = false;
@@ -95,11 +107,22 @@ export default function LoginScreen() {
         style={styles.flex}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          ref={scrollRef}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentContainerStyle={[
+            styles.scrollContent,
+            keyboardHeight > 0 && styles.scrollContentKeyboardOpen,
+            { paddingBottom: scrollContentPaddingBottom },
+          ]}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          onScroll={(e) => {
+            scrollYRef.current = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.page}>
+          <View ref={contentRef} collapsable={false} style={styles.page}>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View style={styles.logoCircle}>
@@ -111,14 +134,15 @@ export default function LoginScreen() {
 
               <View style={styles.divider} />
 
-              <View style={styles.field}>
+              <View ref={accountWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('account')}</Text>
-          <TextInput
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            textContentType="username"
-            onChangeText={setAccount}
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  textContentType="username"
+                  onChangeText={setAccount}
+                  onFocus={() => onFieldFocus(accountWrapRef)}
                   placeholder={t('accountHint')}
                   placeholderTextColor={colors.textMuted}
                   style={styles.input}
@@ -126,10 +150,11 @@ export default function LoginScreen() {
                 />
               </View>
 
-              <View style={styles.field}>
+              <View ref={passwordWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('password')}</Text>
                 <TextInput
                   onChangeText={setPassword}
+                  onFocus={() => onFieldFocus(passwordWrapRef)}
                   placeholder="••••••••"
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry
@@ -169,6 +194,9 @@ export default function LoginScreen() {
               </Pressable>
 
               <View style={styles.cardFooter}>
+                <Link href="/forgot-password">
+                  <Text style={styles.linkText}>{t('forgotPasswordLink')}</Text>
+                </Link>
                 <Link href="/activate">
                   <Text style={styles.linkText}>{t('activateLink')}</Text>
                 </Link>
@@ -229,6 +257,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
     paddingVertical: 28,
+  },
+  scrollContentKeyboardOpen: {
+    justifyContent: 'flex-start',
+    paddingTop: 12,
   },
   page: {
     width: '100%',
@@ -319,7 +351,11 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 20,
   },
   linkText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
   demoBox: {

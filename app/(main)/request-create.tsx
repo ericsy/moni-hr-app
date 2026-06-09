@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -25,11 +26,12 @@ import {
 import { normalizeSubmitReason } from '../../src/api/mapAttendanceRequest';
 import { fetchMyPublishedSchedule } from '../../src/api/schedule';
 import { TimeSelectField } from '../../src/components/TimeSelectField';
+import { CalendarDatePickerModal } from '../../src/components/CalendarDatePickerModal';
 import type { LeaveRequest } from '../../src/context/AuthContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
-import { calendarDateKey } from '../../src/utils/calendarDateKey';
+import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
 import {
   getShiftLeaveBlockReason,
@@ -43,6 +45,7 @@ import {
 } from '../../src/utils/missedPunchEligibility';
 import {
   addDaysLocal,
+  compareDateKeys,
   compareHm,
   defaultPartialFromShiftRange,
   hmFromShiftRange,
@@ -59,6 +62,12 @@ import {
 } from '../../src/utils/requestShiftBinding';
 import { weekNavigatorLabels } from '../../src/utils/localeDateFormat';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
+import { canApplyMissedPunchKind } from '../../src/utils/shiftClockWindow';
+
+function sanitizeRouteParam(value?: string | string[] | null): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return (raw ?? '').trim();
+}
 import {
   doesPunchCoverScheduledShift,
   formatShiftPunchLine,
@@ -130,11 +139,32 @@ export default function RequestCreateScreen() {
   const [partialLeaveByKey, setPartialLeaveByKey] = useState<
     Record<string, { from: string; to: string }>
   >({});
+  const [leaveWindowStartIso, setLeaveWindowStartIso] = useState(() =>
+    calendarDateKey(startOfWeekMondayLocal(getApproximateServerNowDate())),
+  );
+  const [leaveWindowEndIso, setLeaveWindowEndIso] = useState(() =>
+    calendarDateKey(addDaysLocal(startOfWeekMondayLocal(getApproximateServerNowDate()), 6)),
+  );
+  const [leaveCalendarOpen, setLeaveCalendarOpen] = useState<'start' | 'end' | null>(null);
+  /** 提交成功准备跳转时关闭时间滚轮，避免 Android Modal 与页面卸载竞态 */
+  const [leavePickersEnabled, setLeavePickersEnabled] = useState(true);
+  const closingAfterSubmitRef = useRef(false);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
 
   const daySlots = useMemo(() => requestScheduleContext?.slots ?? [], [requestScheduleContext]);
   const selectedSlot = daySlots[slotIndex];
+  const todayIso = calendarDateKey(getApproximateServerNowDate());
+  const normalizedWorkDate = normalizeDateKeyOrToday(workDate, getApproximateServerNowDate());
+
+  const selectedPunch = useMemo(
+    () => (selectedSlot ? getShiftPunch(normalizedWorkDate, selectedSlot) : undefined),
+    [getShiftPunch, selectedSlot, normalizedWorkDate],
+  );
+  const selectedPairPunch = useMemo(() => {
+    if (selectedSlot?.overnightRole !== 'end' || !selectedSlot.overnightPairCellId) return undefined;
+    return shiftPunches.find((p) => p.scheduleId === selectedSlot.overnightPairCellId);
+  }, [selectedSlot, shiftPunches]);
 
   const missedPunchWheelAnchor = useMemo(() => {
     if (!selectedSlot) return '09:00';
@@ -143,25 +173,88 @@ export default function RequestCreateScreen() {
 
   const blockingMissedPunchLeave = useMemo(() => {
     if (type !== 'missed_punch' || !selectedSlot) return false;
-    return isMissedPunchBlockedByLeave(myAttendanceRequests, workDate, selectedSlot);
-  }, [type, myAttendanceRequests, workDate, selectedSlot]);
+    return isMissedPunchBlockedByLeave(myAttendanceRequests, normalizedWorkDate, selectedSlot);
+  }, [type, myAttendanceRequests, normalizedWorkDate, selectedSlot]);
 
   const blockingMissedPunchDuplicate = useMemo(() => {
     if (type !== 'missed_punch' || !selectedSlot) return undefined;
     return findOpenMissedPunchRequest(
       myAttendanceRequests,
-      workDate,
+      normalizedWorkDate,
       selectedSlot,
       punchKind,
     );
-  }, [type, myAttendanceRequests, workDate, selectedSlot, punchKind]);
+  }, [type, myAttendanceRequests, normalizedWorkDate, selectedSlot, punchKind]);
 
-  const blockingMissedPunch = blockingMissedPunchLeave || !!blockingMissedPunchDuplicate;
+  const blockingMissedPunchTooEarly = useMemo(() => {
+    if (type !== 'missed_punch' || !selectedSlot) return false;
+    const now = getApproximateServerNowDate();
+    return !canApplyMissedPunchKind(
+      normalizedWorkDate,
+      selectedSlot.range,
+      selectedPunch,
+      todayIso,
+      punchKind,
+      now,
+      selectedSlot.overnightRole ?? 'normal',
+      selectedPairPunch,
+    );
+  }, [
+    type,
+    normalizedWorkDate,
+    selectedSlot,
+    selectedPunch,
+    todayIso,
+    punchKind,
+    selectedPairPunch,
+  ]);
+
+  const missedPunchInTooEarly = useMemo(() => {
+    if (type !== 'missed_punch' || !selectedSlot || selectedSlot.overnightRole === 'end') return false;
+    return !canApplyMissedPunchKind(
+      normalizedWorkDate,
+      selectedSlot.range,
+      selectedPunch,
+      todayIso,
+      'in',
+      getApproximateServerNowDate(),
+      selectedSlot.overnightRole ?? 'normal',
+      selectedPairPunch,
+    );
+  }, [type, normalizedWorkDate, selectedSlot, selectedPunch, todayIso, selectedPairPunch]);
+
+  const missedPunchOutTooEarly = useMemo(() => {
+    if (type !== 'missed_punch' || !selectedSlot || selectedSlot.overnightRole === 'start') return false;
+    return !canApplyMissedPunchKind(
+      normalizedWorkDate,
+      selectedSlot.range,
+      selectedPunch,
+      todayIso,
+      'out',
+      getApproximateServerNowDate(),
+      selectedSlot.overnightRole ?? 'normal',
+      selectedPairPunch,
+    );
+  }, [type, normalizedWorkDate, selectedSlot, selectedPunch, todayIso, selectedPairPunch]);
+
+  const blockingMissedPunch =
+    blockingMissedPunchLeave || !!blockingMissedPunchDuplicate || blockingMissedPunchTooEarly;
 
   useFocusEffect(
     useCallback(() => {
+      closingAfterSubmitRef.current = false;
+      setLeavePickersEnabled(true);
       void refreshAttendanceRequests();
-    }, [refreshAttendanceRequests]),
+      return () => {
+        // 离开页后再清 context，避免提交成功时先清空触发 applyRouteParams 与 Modal 卸载竞态（Android 13 闪退）
+        const clear = () => setRequestScheduleContext(null);
+        if (Platform.OS === 'android') {
+          setTimeout(clear, 0);
+        } else {
+          clear();
+        }
+      };
+    }, [refreshAttendanceRequests, setRequestScheduleContext]),
   );
 
   useEffect(() => {
@@ -169,11 +262,34 @@ export default function RequestCreateScreen() {
     setProposedTime(missedPunchWheelAnchor);
   }, [type, missedPunchWheelAnchor, selectedSlot?.id, punchKind]);
 
-  const leaveWeekEndIso = useMemo(
-    () => calendarDateKey(addDaysLocal(leaveWeekStart, 6)),
-    [leaveWeekStart],
-  );
+  useEffect(() => {
+    if (selectedSlot?.overnightRole === 'start') setPunchKind('in');
+    if (selectedSlot?.overnightRole === 'end') setPunchKind('out');
+  }, [selectedSlot?.id, selectedSlot?.overnightRole]);
+
   const leaveWeekStartIso = useMemo(() => calendarDateKey(leaveWeekStart), [leaveWeekStart]);
+
+  const leaveWindowLowHigh = useMemo(() => {
+    const lo =
+      compareDateKeys(leaveWindowStartIso, leaveWindowEndIso) <= 0
+        ? leaveWindowStartIso
+        : leaveWindowEndIso;
+    const hi =
+      compareDateKeys(leaveWindowStartIso, leaveWindowEndIso) <= 0
+        ? leaveWindowEndIso
+        : leaveWindowStartIso;
+    return { lo, hi };
+  }, [leaveWindowStartIso, leaveWindowEndIso]);
+
+  const leaveScheduleFetchFromIso = useMemo(
+    () => calendarDateKey(startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.lo))),
+    [leaveWindowLowHigh.lo],
+  );
+  const leaveScheduleFetchToIso = useMemo(
+    () =>
+      calendarDateKey(addDaysLocal(startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.hi)), 6)),
+    [leaveWindowLowHigh.hi],
+  );
 
   const leaveWeekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => {
@@ -181,6 +297,35 @@ export default function RequestCreateScreen() {
       return { iso: calendarDateKey(d), date: d };
     });
   }, [leaveWeekStart]);
+
+  const applyLeaveWindowDate = useCallback(
+    (which: 'start' | 'end', iso: string) => {
+      if (which === 'start') {
+        setLeaveWindowStartIso(iso);
+        if (compareDateKeys(iso, leaveWindowEndIso) > 0) setLeaveWindowEndIso(iso);
+      } else {
+        setLeaveWindowEndIso(iso);
+        if (compareDateKeys(iso, leaveWindowStartIso) < 0) setLeaveWindowStartIso(iso);
+      }
+    },
+    [leaveWindowEndIso, leaveWindowStartIso],
+  );
+
+  const goPrevLeaveWeekNav = useCallback(() => {
+    const next = addDaysLocal(leaveWeekStart, -7);
+    const firstMon = startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.lo));
+    if (next.getTime() < firstMon.getTime()) return;
+    setLeaveWeekStart(next);
+    setLeaveFocusDay(calendarDateKey(next));
+  }, [leaveWeekStart, leaveWindowLowHigh.lo]);
+
+  const goNextLeaveWeekNav = useCallback(() => {
+    const next = addDaysLocal(leaveWeekStart, 7);
+    const lastMon = startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.hi));
+    if (next.getTime() > lastMon.getTime()) return;
+    setLeaveWeekStart(next);
+    setLeaveFocusDay(calendarDateKey(next));
+  }, [leaveWeekStart, leaveWindowLowHigh.hi]);
 
   const weekdayAbbr = useMemo(() => t('weekdayAbbrList').split(',').map((s) => s.trim()), [t]);
 
@@ -316,22 +461,25 @@ export default function RequestCreateScreen() {
     try {
       const data = await fetchMyPublishedSchedule({
         storeId: selectedStoreId,
-        from: leaveWeekStartIso,
-        to: leaveWeekEndIso,
+        from: leaveScheduleFetchFromIso,
+        to: leaveScheduleFetchToIso,
       });
       mergePublishedSchedule(groupPublishedScheduleByDate(data.items ?? []));
-      const weekDays = Array.from({ length: 7 }, (_, i) =>
-        calendarDateKey(addDaysLocal(leaveWeekStart, i)),
-      );
-      await Promise.all(weekDays.map((iso) => refreshShiftPunchesForDate(iso)));
+      const punchDays: string[] = [];
+      let d = parseDateKey(leaveScheduleFetchFromIso);
+      const endD = parseDateKey(leaveScheduleFetchToIso);
+      while (d.getTime() <= endD.getTime()) {
+        punchDays.push(calendarDateKey(d));
+        d = addDaysLocal(d, 1);
+      }
+      await Promise.all(punchDays.map((iso) => refreshShiftPunchesForDate(iso)));
     } finally {
       setLeaveScheduleLoading(false);
     }
   }, [
     selectedStoreId,
-    leaveWeekStart,
-    leaveWeekStartIso,
-    leaveWeekEndIso,
+    leaveScheduleFetchFromIso,
+    leaveScheduleFetchToIso,
     mergePublishedSchedule,
     refreshShiftPunchesForDate,
   ]);
@@ -340,6 +488,40 @@ export default function RequestCreateScreen() {
     if (type !== 'leave' || !selectedStoreId) return;
     void loadLeaveWeekSchedule();
   }, [type, selectedStoreId, loadLeaveWeekSchedule]);
+
+  useEffect(() => {
+    if (type !== 'leave') return;
+    const { lo, hi } = leaveWindowLowHigh;
+    const firstMon = startOfWeekMondayLocal(parseDateKey(lo));
+    const lastMon = startOfWeekMondayLocal(parseDateKey(hi));
+    setLeaveWeekStart((prev) => {
+      if (prev.getTime() < firstMon.getTime()) return firstMon;
+      if (prev.getTime() > lastMon.getTime()) return lastMon;
+      return prev;
+    });
+    setLeaveFocusDay((fd) => {
+      if (compareDateKeys(fd, lo) < 0) return lo;
+      if (compareDateKeys(fd, hi) > 0) return hi;
+      return fd;
+    });
+  }, [type, leaveWindowLowHigh]);
+
+  useEffect(() => {
+    if (type !== 'leave') return;
+    const { lo, hi } = leaveWindowLowHigh;
+    setSelectedShiftKeys((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        const wd = parseShiftSelectionKey(key)?.workDate;
+        if (!wd || compareDateKeys(wd, lo) < 0 || compareDateKeys(wd, hi) > 0) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [type, leaveWindowLowHigh]);
 
   const refreshPageData = useCallback(async () => {
     await refreshAttendanceRequests();
@@ -360,7 +542,7 @@ export default function RequestCreateScreen() {
 
   /** 周切换后排班 key 失效会导致已选 1 段但无法解析，顺带清理 */
   useEffect(() => {
-    if (type !== 'leave') return;
+    if (type !== 'leave' || leaveScheduleLoading) return;
     setSelectedShiftKeys((prev) => {
       let changed = false;
       const next: Record<string, true> = {};
@@ -379,7 +561,7 @@ export default function RequestCreateScreen() {
       }
       return changed ? next : prev;
     });
-  }, [type, publishedScheduleByDate]);
+  }, [type, publishedScheduleByDate, leaveScheduleLoading]);
 
   /** 打卡数据加载后，取消已选但已打满卡的班次 */
   useEffect(() => {
@@ -500,52 +682,119 @@ export default function RequestCreateScreen() {
   );
 
   const applyRouteParams = useCallback(() => {
-    const rawType = params.type;
+    const rawType = sanitizeRouteParam(params.type);
     const nextType: LeaveRequest['type'] =
       rawType === 'missed_punch' ? 'missed_punch' : 'leave';
-    setType(nextType);
-
-    const date = params.workDate ?? calendarDateKey(getApproximateServerNowDate());
-    setWorkDate(date);
-    setLeaveWeekStart(startOfWeekMondayLocal(parseDateKey(date)));
-    setLeaveFocusDay(date);
-
+    const date = normalizeDateKeyOrToday(params.workDate, getApproximateServerNowDate());
     const idx = params.slotIndex != null ? Number(params.slotIndex) : 0;
-    const safeIdx = Number.isFinite(idx) ? idx : 0;
-    setSlotIndex(safeIdx);
+    let safeIdx = Number.isFinite(idx) ? idx : 0;
+    const nextPunchKind = sanitizeRouteParam(params.punchKind) === 'out' ? 'out' : 'in';
+    const weekStart = startOfWeekMondayLocal(parseDateKey(date));
+    const contextSlots = requestScheduleContext?.slots ?? [];
+    const scheduleId = sanitizeRouteParam(params.scheduleId);
+    let slot = contextSlots[safeIdx];
+    if (scheduleId) {
+      const byIdIdx = contextSlots.findIndex((s) => s.id === scheduleId);
+      if (byIdIdx >= 0) {
+        safeIdx = byIdIdx;
+        slot = contextSlots[byIdIdx];
+      } else {
+        for (const daySlots of Object.values(publishedScheduleByDate)) {
+          const found = daySlots.find((s) => s.id === scheduleId);
+          if (found) {
+            slot = found;
+            break;
+          }
+        }
+      }
+    }
 
-    setPunchKind(params.punchKind === 'out' ? 'out' : 'in');
+    setType((prev) => (prev === nextType ? prev : nextType));
+    setWorkDate((prev) => (prev === date ? prev : date));
+    setLeaveWeekStart((prev) =>
+      calendarDateKey(prev) === calendarDateKey(weekStart) ? prev : weekStart,
+    );
+    setLeaveFocusDay((prev) => (prev === date ? prev : date));
+    setSlotIndex((prev) => (prev === safeIdx ? prev : safeIdx));
+    setPunchKind((prev) => (prev === nextPunchKind ? prev : nextPunchKind));
 
-    const kind = params.punchKind === 'out' ? 'out' : 'in';
-    if (params.range) {
-      setProposedTime(hmFromShiftRange(params.range, kind === 'out' ? 'end' : 'start'));
-    } else if (requestScheduleContext?.slots[safeIdx]) {
-      setProposedTime(
-        hmFromShiftRange(
-          requestScheduleContext.slots[safeIdx].range,
-          kind === 'out' ? 'end' : 'start',
-        ),
-      );
+    const nextProposedTime = slot
+      ? hmFromShiftRange(slot.range, nextPunchKind === 'out' ? 'end' : 'start')
+      : null;
+    if (nextProposedTime) {
+      setProposedTime((prev) => (prev === nextProposedTime ? prev : nextProposedTime));
     }
 
     if (nextType === 'leave') {
-      const slot = requestScheduleContext?.slots[safeIdx];
-      setSelectedShiftKeys(
-        slot ? { [shiftSelectionKeyFromSlot(date, slot)]: true } : {},
-      );
+      setLeaveWindowStartIso(calendarDateKey(weekStart));
+      setLeaveWindowEndIso(calendarDateKey(addDaysLocal(weekStart, 6)));
+      const nextKeys = slot ? { [shiftSelectionKeyFromSlot(date, slot)]: true as const } : {};
+      const nextKey = Object.keys(nextKeys)[0] ?? '';
+      setSelectedShiftKeys((prev) => {
+        const prevKey = Object.keys(prev)[0] ?? '';
+        if (prevKey === nextKey && Object.keys(prev).length === Object.keys(nextKeys).length) {
+          return prev;
+        }
+        return nextKeys;
+      });
     } else {
-      setSelectedShiftKeys({});
+      setSelectedShiftKeys((prev) => (Object.keys(prev).length === 0 ? prev : {}));
     }
-  }, [params, requestScheduleContext]);
+  }, [params, requestScheduleContext, publishedScheduleByDate]);
 
-  const routeInitHandled = useRef(false);
+  const routeParamsKey = useMemo(() => {
+    const date = normalizeDateKeyOrToday(params.workDate);
+    const idx = params.slotIndex != null ? String(params.slotIndex) : '0';
+    const slotIds = (requestScheduleContext?.slots ?? []).map((s) => s.id).join(',');
+    return [
+      sanitizeRouteParam(params.type),
+      date,
+      idx,
+      sanitizeRouteParam(params.punchKind),
+      sanitizeRouteParam(params.scheduleId),
+      slotIds,
+    ].join('|');
+  }, [
+    params.type,
+    params.workDate,
+    params.slotIndex,
+    params.punchKind,
+    params.scheduleId,
+    requestScheduleContext?.slots,
+  ]);
+
+  const appliedRouteParamsKeyRef = useRef<string | null>(null);
+  const applyRouteParamsRef = useRef(applyRouteParams);
+  applyRouteParamsRef.current = applyRouteParams;
+
   useEffect(() => {
-    if (routeInitHandled.current) return;
-    routeInitHandled.current = true;
-    applyRouteParams();
-  }, [applyRouteParams]);
+    if (closingAfterSubmitRef.current) return;
+    if (appliedRouteParamsKeyRef.current === routeParamsKey) return;
+    appliedRouteParamsKeyRef.current = routeParamsKey;
+    applyRouteParamsRef.current();
+  }, [routeParamsKey]);
+
+  const closeAfterSubmit = useCallback(() => {
+    if (closingAfterSubmitRef.current) return;
+    closingAfterSubmitRef.current = true;
+    setLeavePickersEnabled(false);
+    setLeaveCalendarOpen(null);
+    // MIUI/Android 13/Imin：提交成功后立即清 context / 切页易与键盘、时间滚轮 Modal 卸载竞态崩溃。
+    Keyboard.dismiss();
+    const navigate = () => router.replace('/requests');
+    if (Platform.OS === 'android') {
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => requestAnimationFrame(navigate), 300);
+      });
+    } else {
+      InteractionManager.runAfterInteractions(() => {
+        requestAnimationFrame(navigate);
+      });
+    }
+  }, []);
 
   const onCreate = async () => {
+    try {
     const reasonText = normalizeSubmitReason(reason);
     if (type === 'leave') {
       const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
@@ -598,13 +847,30 @@ export default function RequestCreateScreen() {
             ? leaveTimesByScheduleKey[shiftSelectionKeyFromBinding(shifts[0])]
             : undefined,
       });
-      setSubmitBusy(false);
       if (!res.ok) {
+        setSubmitBusy(false);
         Alert.alert(t('typeLeave'), res.message ?? t('requestSubmitFailed'));
         return;
       }
     } else {
       if (!selectedSlot) return;
+      const now = getApproximateServerNowDate();
+      const today = calendarDateKey(now);
+      if (
+        !canApplyMissedPunchKind(
+          normalizedWorkDate,
+          selectedSlot.range,
+          selectedPunch,
+          today,
+          punchKind,
+          now,
+          selectedSlot.overnightRole ?? 'normal',
+          selectedPairPunch,
+        )
+      ) {
+        Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
+        return;
+      }
       if (blockingMissedPunchLeave) {
         Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
         return;
@@ -613,29 +879,45 @@ export default function RequestCreateScreen() {
         Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
         return;
       }
-      const shift = buildShiftBinding(workDate, slotIndex, selectedSlot);
+      const shift = buildShiftBinding(normalizedWorkDate, slotIndex, selectedSlot);
       setSubmitBusy(true);
       const res = await submitAttendanceRequest({
         type: 'missed_punch',
         reason: reasonText,
-        workDate,
+        workDate: normalizedWorkDate,
         shift,
         punchKind,
         proposedTime: proposedTime.trim(),
       });
-      setSubmitBusy(false);
       if (!res.ok) {
+        setSubmitBusy(false);
         Alert.alert(t('typeMissedPunch'), res.message ?? t('requestSubmitFailed'));
         return;
       }
     }
-    setRequestScheduleContext(null);
-    router.back();
+    closeAfterSubmit();
+    } catch (e) {
+      setSubmitBusy(false);
+      const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+      Alert.alert(type === 'leave' ? t('typeLeave') : t('typeMissedPunch'), message);
+    }
   };
 
   const closeCreate = () => {
-    setRequestScheduleContext(null);
-    router.back();
+    setLeavePickersEnabled(false);
+    setLeaveCalendarOpen(null);
+    Keyboard.dismiss();
+    const back = () => {
+      setRequestScheduleContext(null);
+      router.back();
+    };
+    if (Platform.OS === 'android') {
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(back, 120);
+      });
+    } else {
+      back();
+    }
   };
 
   const pageTitle = type === 'missed_punch' ? t('typeMissedPunch') : t('typeLeave');
@@ -721,7 +1003,9 @@ export default function RequestCreateScreen() {
                 <Text style={[styles.slotCardTitle, on && styles.slotCardTitleOn]}>
                   {slot.areaName} · {slot.shiftName}
                 </Text>
-                <Text style={[styles.slotCardTime, on && styles.slotCardTimeOn]}>{slot.range}</Text>
+                <Text style={[styles.slotCardTime, on && styles.slotCardTimeOn]}>
+                  {slot.range}
+                </Text>
               </Pressable>
             );
           })}
@@ -729,29 +1013,66 @@ export default function RequestCreateScreen() {
       )}
       {blockingMissedPunchLeave ? (
         <Text style={styles.warn}>{t('missedPunchBlockedByLeave')}</Text>
+      ) : blockingMissedPunchTooEarly ? (
+        <Text style={styles.warn}>{t('missedPunchBeforePunchTime')}</Text>
       ) : blockingMissedPunchDuplicate ? (
         <Text style={styles.warn}>{t('missedPunchAlreadyPending')}</Text>
       ) : null}
-      <Text style={styles.label}>{t('missedPunchKind')}</Text>
-      <View style={styles.row}>
-        <Pressable
-          onPress={() => setPunchKind('in')}
-          style={[styles.chip, punchKind === 'in' && styles.chipOn]}
-        >
-          <Text style={[styles.chipText, punchKind === 'in' && styles.chipTextOn]}>{t('clockIn')}</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => setPunchKind('out')}
-          style={[styles.chip, punchKind === 'out' && styles.chipOn]}
-        >
-          <Text style={[styles.chipText, punchKind === 'out' && styles.chipTextOn]}>{t('clockOut')}</Text>
-        </Pressable>
-      </View>
+      {selectedSlot?.overnightRole === 'start' || selectedSlot?.overnightRole === 'end' ? (
+        <Text style={styles.warn}>
+          {selectedSlot.overnightRole === 'start'
+            ? t('overnightMissedPunchInOnly')
+            : t('overnightMissedPunchOutOnly')}
+        </Text>
+      ) : (
+        <>
+          <Text style={styles.label}>{t('missedPunchKind')}</Text>
+          <View style={styles.row}>
+            <Pressable
+              onPress={() => !missedPunchInTooEarly && setPunchKind('in')}
+              style={[
+                styles.chip,
+                punchKind === 'in' && styles.chipOn,
+                missedPunchInTooEarly && styles.chipDisabled,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  punchKind === 'in' && styles.chipTextOn,
+                  missedPunchInTooEarly && styles.chipTextDisabled,
+                ]}
+              >
+                {t('clockIn')}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => !missedPunchOutTooEarly && setPunchKind('out')}
+              style={[
+                styles.chip,
+                punchKind === 'out' && styles.chipOn,
+                missedPunchOutTooEarly && styles.chipDisabled,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  punchKind === 'out' && styles.chipTextOn,
+                  missedPunchOutTooEarly && styles.chipTextDisabled,
+                ]}
+              >
+                {t('clockOut')}
+              </Text>
+            </Pressable>
+          </View>
+        </>
+      )}
       <Text style={styles.label}>{t('missedPunchProposedTime')}</Text>
       <TimeSelectField
         value={proposedTime}
         onChange={setProposedTime}
         wheelAnchor={missedPunchWheelAnchor}
+        disabled={!leavePickersEnabled}
       />
     </>
   );
@@ -787,6 +1108,7 @@ export default function RequestCreateScreen() {
   };
 
   const renderLeaveForm = () => {
+    const { lo: winLo, hi: winHi } = leaveWindowLowHigh;
     const focusedSelectedCount = countSelectedOnDay(leaveFocusDay);
     const selectableFocusedSlots = focusedSlots.filter(
       (s) => !isShiftLeaveBlocked(s, leaveFocusDay),
@@ -817,33 +1139,37 @@ export default function RequestCreateScreen() {
           ) : null}
         </View>
 
+        <Text style={styles.leaveCalendarHint}>{t('leaveShiftCalendarHint')}</Text>
+        <View style={styles.leaveDatePickRow}>
+          <View style={styles.leaveDatePickCol}>
+            <Text style={styles.label}>{t('leaveShiftPeriodStart')}</Text>
+            <Pressable onPress={() => setLeaveCalendarOpen('start')} style={styles.leaveDatePickBtn}>
+              <Text style={styles.leaveDatePickBtnText} numberOfLines={1}>
+                {formatPunchHeaderDate(leaveWindowStartIso, dateLang)}
+              </Text>
+              <Ionicons color={colors.primary} name="calendar-outline" size={18} />
+            </Pressable>
+          </View>
+          <View style={styles.leaveDatePickCol}>
+            <Text style={styles.label}>{t('leaveShiftPeriodEnd')}</Text>
+            <Pressable onPress={() => setLeaveCalendarOpen('end')} style={styles.leaveDatePickBtn}>
+              <Text style={styles.leaveDatePickBtnText} numberOfLines={1}>
+                {formatPunchHeaderDate(leaveWindowEndIso, dateLang)}
+              </Text>
+              <Ionicons color={colors.primary} name="calendar-outline" size={18} />
+            </Pressable>
+          </View>
+        </View>
+
         <View style={styles.weekBar}>
-          <Pressable
-            hitSlop={8}
-            onPress={() => {
-              const n = addDaysLocal(leaveWeekStart, -7);
-              setLeaveWeekStart(n);
-              setLeaveFocusDay(calendarDateKey(n));
-              setSelectedShiftKeys({});
-            }}
-            style={styles.weekChevron}
-          >
+          <Pressable hitSlop={8} onPress={goPrevLeaveWeekNav} style={styles.weekChevron}>
             <Ionicons color={colors.primary} name="chevron-back" size={24} />
           </Pressable>
           <View style={styles.weekBarCenter}>
             <Text style={styles.weekRangeBold}>{leaveWeekNav.rangeLine}</Text>
             <Text style={styles.weekMetaMuted}>{leaveWeekNav.metaLine}</Text>
           </View>
-          <Pressable
-            hitSlop={8}
-            onPress={() => {
-              const n = addDaysLocal(leaveWeekStart, 7);
-              setLeaveWeekStart(n);
-              setLeaveFocusDay(calendarDateKey(n));
-              setSelectedShiftKeys({});
-            }}
-            style={styles.weekChevron}
-          >
+          <Pressable hitSlop={8} onPress={goNextLeaveWeekNav} style={styles.weekChevron}>
             <Ionicons color={colors.primary} name="chevron-forward" size={24} />
           </Pressable>
         </View>
@@ -854,11 +1180,21 @@ export default function RequestCreateScreen() {
             const weekdayIdx = (day.date.getDay() + 6) % 7;
             const hasWork = (publishedScheduleByDate[day.iso]?.length ?? 0) > 0;
             const picked = countSelectedOnDay(day.iso);
+            const inWindow =
+              compareDateKeys(day.iso, winLo) >= 0 && compareDateKeys(day.iso, winHi) <= 0;
             return (
               <Pressable
                 key={day.iso}
-                onPress={() => setLeaveFocusDay(day.iso)}
-                style={[styles.dayCell, active && styles.dayCellActive]}
+                disabled={!inWindow}
+                onPress={() => {
+                  if (!inWindow) return;
+                  setLeaveFocusDay(day.iso);
+                }}
+                style={[
+                  styles.dayCell,
+                  active && styles.dayCellActive,
+                  !inWindow && styles.dayCellMuted,
+                ]}
               >
                 <Text style={[styles.dayCellWeek, active && styles.dayCellWeekActive]} numberOfLines={1}>
                   {weekdayAbbr[weekdayIdx] ?? ''}
@@ -1035,6 +1371,7 @@ export default function RequestCreateScreen() {
                             value={partial.from}
                             onChange={(v) => updatePartialLeave(key, { from: v })}
                             wheelAnchor={slotBounds.start}
+                            disabled={!leavePickersEnabled}
                           />
                         </View>
                         <Text style={styles.leaveTimeRangeSep}>–</Text>
@@ -1044,6 +1381,7 @@ export default function RequestCreateScreen() {
                             value={partial.to}
                             onChange={(v) => updatePartialLeave(key, { to: v })}
                             wheelAnchor={slotBounds.end}
+                            disabled={!leavePickersEnabled}
                           />
                         </View>
                       </View>
@@ -1114,9 +1452,12 @@ export default function RequestCreateScreen() {
             <Text style={styles.secondaryText}>{t('cancel')}</Text>
           </Pressable>
           <Pressable
-            onPress={() => void onCreate()}
-            disabled={!canSubmit}
-            style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
+            onPress={() => {
+              if (submitBusy || !canSubmit) return;
+              void onCreate();
+            }}
+            disabled={!canSubmit || submitBusy}
+            style={[styles.primaryBtn, (!canSubmit || submitBusy) && styles.primaryBtnDisabled]}
           >
             {submitBusy ? (
               <ActivityIndicator color="#fff" size="small" />
@@ -1126,6 +1467,18 @@ export default function RequestCreateScreen() {
           </Pressable>
         </View>
       </View>
+      {type === 'leave' && leaveCalendarOpen ? (
+        <CalendarDatePickerModal
+          visible
+          title={
+            leaveCalendarOpen === 'end' ? t('leaveShiftPeriodEnd') : t('leaveShiftPeriodStart')
+          }
+          anchorIso={leaveCalendarOpen === 'end' ? leaveWindowEndIso : leaveWindowStartIso}
+          minIso={leaveCalendarOpen === 'end' ? leaveWindowStartIso : undefined}
+          onRequestClose={() => setLeaveCalendarOpen(null)}
+          onSelectDate={(iso) => applyLeaveWindowDate(leaveCalendarOpen, iso)}
+        />
+      ) : null}
     </>
   );
 }
@@ -1250,6 +1603,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
+  dayCellMuted: { opacity: 0.38 },
+  leaveCalendarHint: { marginTop: 10, fontSize: 12, color: colors.textMuted, lineHeight: 17 },
+  leaveDatePickRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  leaveDatePickCol: { flex: 1, minWidth: 0 },
+  leaveDatePickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  leaveDatePickBtnText: { flex: 1, fontSize: 14, fontWeight: '700', color: colors.text },
   dayCellWeek: {
     fontSize: 10,
     fontWeight: '700',
@@ -1372,7 +1743,6 @@ const styles = StyleSheet.create({
   chipOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
   chipDisabled: { opacity: 0.45 },
   chipTextDisabled: { color: colors.textMuted },
-  chipDisabled: { opacity: 0.45 },
   chipText: { color: colors.textMuted, fontWeight: '700' },
   chipTextOn: { color: colors.primaryDark },
   leaveTimeHint: { marginBottom: 8, fontSize: 12, color: colors.textMuted, lineHeight: 18 },

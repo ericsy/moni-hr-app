@@ -20,6 +20,9 @@ export function isUnauthorized(httpStatus: number, apiCode?: number): boolean {
   return httpStatus === 401 || apiCode === 401;
 }
 
+/** AuthContext 映射为 i18n loginErrorInvalidResponse */
+export const API_INVALID_RESPONSE = 'API_INVALID_RESPONSE';
+
 let tokenGetter: () => string | null = () => null;
 let langGetter: () => ApiLang = () => 'en';
 let unauthorizedHandler: (() => void) | null = null;
@@ -90,15 +93,16 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const dateHeader = res.headers.get('date') ?? res.headers.get('Date');
   syncServerTimeFromHttpDateHeader(dateHeader);
 
+  const raw = await res.text();
   let json: ApiResult<T> | null = null;
   try {
-    json = (await res.json()) as ApiResult<T>;
+    json = JSON.parse(raw) as ApiResult<T>;
   } catch {
     if (isUnauthorized(res.status)) {
       notifyUnauthorized(options);
       throw new ApiError(401, 'Unauthorized');
     }
-    throw new ApiError(res.status, 'Invalid server response');
+    throw new ApiError(res.status, API_INVALID_RESPONSE);
   }
 
   if (json && !isApiSuccess(json.code)) {

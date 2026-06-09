@@ -1,5 +1,56 @@
 # moni-hr-app 变更日志
 
+## 2026-05-29
+
+- **TestFlight · test 环境**：**`eas.json`** 新增 **`testflight`** profile（`APP_ENV=test`、`distribution: store`、`autoIncrement`）；应用名 **Moni HR Test**，API **`http://test-api.monihr.com`**。构建：`eas build --platform ios --profile testflight`；提交：`eas submit --platform ios --profile testflight`（与 production 共用 **`com.monihr`**，TestFlight 里按构建号区分）。
+
+- **登录提示 Invalid server response**：根因多为网络/防火墙（如 FortiGuard）对 `test-api.monihr.com` 返回 HTML 403 而非 JSON；**`client.ts`** 先读文本再解析，非 JSON 时抛 **`API_INVALID_RESPONSE`**；**`AuthContext`** 映射为 **`loginErrorInvalidResponse`** 中文说明。若仍失败：确认已用 **`http://` 修复后重打的 test 包；换非公司 WiFi/手机流量；请 IT 放行域名。
+
+- **test 包登录失败 / 无法联网**：`test-api.monihr.com` 等环境 **仅开放 HTTP（80）**，配置误用 `https://` 导致连接被拒；**`config/apiEnv.js`** 改为 `http://`；Android **`withAndroidHttp.js`** 增加 `monihr.com` 明文域名；登录网络异常提示 **`loginErrorNetwork`**。
+
+- **多环境 API 地址**：`APP_ENV` 选择后端 — `dev` / `test` / `pro` 域名见 **`config/apiEnv.js`**（**`app.config.ts`** 须引用根目录 JS，不能 import `src/`）；**`eas build --profile test`** 等已可正常读配置。
+
+- **iOS 打包配置**：`app.json` 中 **`ios.bundleIdentifier": "com.monihr"`**（Android 仍为 **`com.moni.hr`**）。
+
+- **Android 登录 · 密码框被键盘遮挡**：键盘弹出时 `justifyContent: 'center'` 导致无法上滚；改为键盘打开时顶对齐、底部随键盘增高 padding，聚焦账号/密码时 `measureInWindow` 自动滚入可视区（**`login.tsx`**）。
+
+- **Android 忘记密码 · 验证码/新密码被键盘遮挡**：移除 `flex:1` 居中容器限制滚动高度；新增 **`useScrollInputAboveKeyboard`**（`measureLayout` 精确定位、区分 resize/overlay 键盘、键盘弹出后二次滚动）；登录页同步使用该 hook（**`forgot-password.tsx`**、**`login.tsx`**、**`useScrollInputAboveKeyboard.ts`**）。
+
+- **登录页 · 忘记密码 / 账户激活**：两个次要入口改为一行居中（`忘记密码` `账户激活`），去掉问号与中间分隔点；链接间距加大至 20px（**`login.tsx`**、**`resources.ts`**）。
+
+- **忘记密码**：登录页「忘记密码？」→ **`forgot-password.tsx`**；调用 **`POST /api/v1/app/auth/password-reset/send-code`**、**`POST .../confirm`**；**`AuthContext.sendPasswordResetCode`** / **`resetPasswordWithCode`**；中英文文案已补充。
+
+- **Android 13 / Imin · 部分时段请假提交后闪退**：数据已提交成功，但 **`closeAfterSubmit`** 在 **`router.replace`** 前 **`setRequestScheduleContext(null)`** 触发 **`applyRouteParams`** 与 **`TimeSelectField` Modal** 同时卸载导致竞态。改为提交成功时先 **`setLeavePickersEnabled(false)`**、延后跳转（Android +300ms）、**`requestScheduleContext`** 在页面失焦后清理；**`TimeSelectField`** 使用 **`Modal visible`** + 延迟卸载，并支持 **`disabled`**。
+
+- **排班页 · 请假/漏打卡已通过仍显示「等待审批」**：下拉刷新会正确拉取最新申请状态，但 **`MyShiftCard`** 将「待审批 + 已通过」的占用统一走 **`shiftStatusLeavePending`** 文案。现按 **`getShiftLeaveRequestStatus`** / **`getShiftMissedPunchOpenStatus`** 区分 pending 与 approved，新增 **`shiftStatusLeaveApproved`** 等 i18n；**`normalizeStatus`** 将 API 的 **`reviewed`** 映射为 **`approved`**。
+
+## 2026-05-28
+
+- **Android（MIUI/13）提交成功闪退**：提交请假/漏打卡成功后不再 `router.back()`；改为 **`Keyboard.dismiss()` + `InteractionManager.runAfterInteractions` 延迟后 `router.replace('/requests')`**（**`request-create.tsx`**、**`date-leave-create.tsx`**），规避键盘/转场/路由栈时序导致的崩溃。
+
+- **申请记录 · 按日期请假展示**：**`requests.tsx`** 不展示「共几段排班」及班次列表（**`leaveMode === 'date_range'` 或 `shifts.length === 0`**）；**`mapAttendanceRequest.ts`** 增加 **`resolveLeaveModeForRow`**：兼容 **`leaveMode`** 大小写/连字符、并在 **`leaveDateFrom` + `leaveDateTo`** 且非显式 **`shift`** 时识别为 **`date_range`**，且 **`shifts` 恒为空**，避免后端未标 `date_range` 仍带 **`leaveItems`** 时列表误显示段数。
+
+- **日历选开始日**：修复开始日期弹窗传入 **`maxIso=结束日`** 导致「开始日不能晚于当前结束日」、6 月及之后日期全部灰掉不可点的问题；**`request-create`** / **`date-leave-create`** 选开始时不再传 **`maxIso`**（选晚于原结束日的开始日后，结束日仍由 **`applyLeaveWindowDate` / `applyCalendarDate`** 自动顺延）。
+
+- **按时间（按班次）请假**：取消请假开始/结束日期区间的 **最长天数限制**（原 90 天校验已移除，**`request-create.tsx`**）。
+
+- **按日期请假入口**：从排班页移除快捷入口；在 **申请记录**（**`requests.tsx`**）列表顶部增加「按日期请假」入口，跳转 **`date-leave-create`**。
+- **按班次请假日期范围 + 日历**：**`request-create.tsx`** 增加「请假开始/结束日期」日历弹窗（**`CalendarDatePickerModal.tsx`**）；按该区间拉取多周已发布排班与打卡；周条左右切换限制在区间内；区间内未选日期灰显。
+- **按日期请假日历**：**`date-leave-create.tsx`** 起止日在 `±` 旁支持点击打开同一日历弹窗选日（**`dateLeavePickCalendar`** 无障碍标签）。
+- **文案**：**`resources.ts`** 新增 `leaveShiftPeriodStart` / `leaveShiftPeriodEnd` / `leaveShiftCalendarHint` / `dateLeavePickCalendar`；`requestsEmpty` 中英补充说明本页「按日期请假」。
+
+## 2026-05-27
+
+- **按日期区间请假（App）**：入口在 **申请记录** 页（**`requests.tsx`**）→ **`date-leave-create.tsx`**；曾短暂在排班页提供快捷入口，已移至申请记录。提交 **`leaveMode=date_range`** + **`leaveDateFrom`** / **`leaveDateTo`**；列表/详情展示区间；审批无替班 UI。
+
+- **跨天夜班（App）**：
+  - **`overnightShiftPair.ts`** + **`mapPublishedSchedule`**：识别 `23:59`/`00:00` 配对，标注 **`overnightRole`**、**`overnightPairCellId`**、合并展示 **`overnightDisplayRange`**。
+  - **`shiftClockWindow` / `MyShiftCard`**：首段仅上班、末段仅下班按钮；末段用配对首段上班卡判断可否下班；卡片展示合并时段。
+  - **`schedule.tsx`**：末段日自动拉取前一日打卡；漏打卡提交带 **`overnightPairCellId`** / **`overnightRole`**（**`mapAttendanceRequest`**、**`request-create`**）。
+  - 文案：**`overnightMissedPunchInOnly`** / **`overnightMissedPunchOutOnly`**。
+
+- **请假替班（前端）**：**`request-detail.tsx`** 审批请假时通过 **`GET .../attendance/substitute-candidates?leaveItemId=`** 下拉选替班人（仅当前门店、该时段无已发布排班）；**`attendance.ts`** 新增 **`fetchSubstituteCandidates`**；已审批展示 **`leaveItems[].substitution`**；**`MyShiftCard`** 替班标签；**`types`** / **`AuthContext.reviewAttendanceRequest`** 对接 **`substitutions`**。
+
 ## 2026-05-16
 
 - 新增：完成「moni-hr」排班 App 的 UX 交互设计说明（面向 NZ/AU/CN，iOS/Android/鸿蒙，中英切换；白底蓝点缀科技风）。设计文档见对话与下文结构，尚未实现界面代码。
@@ -156,3 +207,12 @@
 - 设计：新增 App Logo 草案 `assets/moni-hr-logo-icon.png`（蓝白科技风，M + 排班/考勤意象，与主题色 `#2563EB` 一致）。
 - 班次匹配：排班重发布后 `publishedCellId` 会变；打卡/请假/漏打卡的**展示与互斥判断**改为按快照键 `t:workDate|startTime|endTime`（仅日期+计划时段）匹配；提交打卡/申请仍用**当前**格子 `publishedCellId`；`src/utils/shiftIdentity.ts` + `mapClockPunches`、eligibility、`getShiftPunch`、请假选班 key 等。
 - 修复：`request-create.tsx` 同一作用域重复声明 `found` 导致 SyntaxError。
+- 修复：新建请假选班同日多段相同 `08:00–14:00` 时 `t:` 键重复导致 React duplicate key；选班态改为 `cell:日期|publishedCellId`，业务匹配仍用 `shiftKey`（`t:`）。
+- 修改：排班页当前班次若为「替班」（`isSubstitution`），不允许发起请假（隐藏请假入口）。
+- UI：替班标签移至班次时间右侧显示（`MyShiftCard`）。
+- 规则：当前班次在计划上/下班时刻之前不可提交漏打卡申请；排班卡隐藏漏打卡入口，新建申请页同步拦截（`shiftClockWindow` / `schedule.tsx` / `request-create.tsx`）。
+- 修复：漏打卡须等**正常打卡窗口结束**后才可申请（上班窗口至班次结束、下班窗口至结束后 20 分钟）；提交时二次校验；支持 `HH:mm:ss` 时段解析。
+- 修复 Android：路由 `workDate` 空串/数组导致被误判为历史日期而绕过时间校验；归一化 `normalizeDateKey`、时段解析增强、提交按钮 `onPress` 硬拦截、路由参数延迟到达时重新应用。
+- UI：跨天夜班各段排班卡片/申请页改为显示**本段** `range`（如 `22:00–23:59` / `00:00–06:00`），不再合并为 `22:00–06:00`。
+- 修复：`request-create` 路由参数 `useEffect` 无限 setState 导致 Maximum update depth exceeded；改为稳定 `routeParamsKey` + 仅值变化时更新 state。
+- 修复 Android 请假闪退：路由参数去除 Unicode 时段/区域名（en-dash 等）；`InteractionManager` 延迟跳转；请假页加载完成前不清除已选班次；提交 payload 键对齐 `cell:` 键；`TimeSelectField` Android 禁用 `fontVariant`。

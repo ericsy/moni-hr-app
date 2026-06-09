@@ -11,6 +11,7 @@ const NETWORK_SECURITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
   <base-config cleartextTrafficPermitted="true" />
   <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">monihr.com</domain>
     <domain includeSubdomains="false">3.80.125.254</domain>
   </domain-config>
 </network-security-config>

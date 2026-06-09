@@ -39,6 +39,7 @@ function statusLabel(status: LeaveRequest['status'], t: (k: string) => string) {
 }
 
 function requestTypeLabel(item: LeaveRequest, t: (k: string) => string) {
+  if (item.type === 'leave' && item.leaveMode === 'date_range') return t('dateLeaveTitle');
   if (item.type === 'leave') return t('typeLeave');
   return t('typeMissedPunch');
 }
@@ -168,10 +169,13 @@ export default function RequestsScreen() {
               ? t('requestWorkDate') + ': ' + item.start
               : t('leaveDateSpan', { start: item.start, end: item.end })}
           </Text>
-          <Text style={styles.meta}>
-            {t('leaveShiftCount', { count: item.shifts.length })}
-          </Text>
-          {item.shifts.map((s) => (
+          {(item.leaveMode === 'date_range' || item.shifts.length === 0) ? null : (
+            <Text style={styles.meta}>
+              {t('leaveShiftCount', { count: item.shifts.length })}
+            </Text>
+          )}
+          {(item.leaveMode === 'date_range' || item.shifts.length === 0) ? null : (
+            item.shifts.map((s) => (
             <Text key={shiftSelectionKeyFromBinding(s)} style={styles.metaSub}>
               · {s.workDate} {formatShiftBindingLine(s)}
               {item.shifts.length === 1 &&
@@ -181,7 +185,8 @@ export default function RequestsScreen() {
                 ? ` · ${t('leaveTimeSpan', { from: item.leaveTime.from, to: item.leaveTime.to })}`
                 : ''}
             </Text>
-          ))}
+            ))
+          )}
         </>
       ) : (
         <>
@@ -233,33 +238,47 @@ export default function RequestsScreen() {
       : t('requestsMineEmpty')
     : t('requestsEmpty');
 
-  const listHeader = splitRequestViews ? (
-    <View style={styles.listTabs}>
+  const listHeader = (
+    <View style={styles.listHeaderWrap}>
       <Pressable
-        onPress={() => setListTab('approvals')}
-        style={[styles.listTab, listTab === 'approvals' && styles.listTabActive]}
+        accessibilityLabel={t('dateLeaveTitle')}
+        accessibilityRole="button"
+        onPress={() => router.push('/date-leave-create')}
+        style={({ pressed }) => [styles.dateLeaveEntry, pressed && styles.dateLeaveEntryPressed]}
       >
-        <Text style={[styles.listTabText, listTab === 'approvals' && styles.listTabTextActive]}>
-          {t('requestsTabApprovals')}
-        </Text>
-        {pendingApprovalCount > 0 ? (
-          <View style={styles.listTabBadge}>
-            <Text style={styles.listTabBadgeText}>
-              {pendingApprovalCount > 9 ? '9+' : pendingApprovalCount}
+        <Ionicons color={colors.primary} name="calendar-outline" size={18} />
+        <Text style={styles.dateLeaveEntryText}>{t('dateLeaveTitle')}</Text>
+        <Ionicons color={colors.primary} name="chevron-forward" size={16} />
+      </Pressable>
+      {splitRequestViews ? (
+        <View style={styles.listTabs}>
+          <Pressable
+            onPress={() => setListTab('approvals')}
+            style={[styles.listTab, listTab === 'approvals' && styles.listTabActive]}
+          >
+            <Text style={[styles.listTabText, listTab === 'approvals' && styles.listTabTextActive]}>
+              {t('requestsTabApprovals')}
             </Text>
-          </View>
-        ) : null}
-      </Pressable>
-      <Pressable
-        onPress={() => setListTab('mine')}
-        style={[styles.listTab, listTab === 'mine' && styles.listTabActive]}
-      >
-        <Text style={[styles.listTabText, listTab === 'mine' && styles.listTabTextActive]}>
-          {t('requestsTabMine')}
-        </Text>
-      </Pressable>
+            {pendingApprovalCount > 0 ? (
+              <View style={styles.listTabBadge}>
+                <Text style={styles.listTabBadgeText}>
+                  {pendingApprovalCount > 9 ? '9+' : pendingApprovalCount}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+          <Pressable
+            onPress={() => setListTab('mine')}
+            style={[styles.listTab, listTab === 'mine' && styles.listTabActive]}
+          >
+            <Text style={[styles.listTabText, listTab === 'mine' && styles.listTabTextActive]}>
+              {t('requestsTabMine')}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
-  ) : null;
+  );
 
   return (
     <>
@@ -343,6 +362,20 @@ const styles = StyleSheet.create({
   },
   listTabBadgeText: { fontSize: 10, fontWeight: '800', color: '#fff' },
   list: { paddingHorizontal: 20, paddingTop: 12, gap: 12, paddingBottom: 40 },
+  listHeaderWrap: { gap: 12, marginBottom: 4 },
+  dateLeaveEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  dateLeaveEntryPressed: { opacity: 0.92 },
+  dateLeaveEntryText: { flex: 1, fontSize: 15, fontWeight: '800', color: colors.primaryDark },
   emptyList: { textAlign: 'center', color: colors.textMuted, fontSize: 15, paddingVertical: 32 },
   card: {
     backgroundColor: colors.surface,

@@ -7,7 +7,11 @@ import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
 import { colors } from '../theme/colors';
 import { getApproximateServerNowDate } from '../utils/serverClock';
-import type { MissedPunchPendingStatus } from '../utils/missedPunchEligibility';
+import type {
+  MissedPunchPendingStatus,
+  ShiftMissedPunchOpenStatus,
+} from '../utils/missedPunchEligibility';
+import type { ShiftLeaveRequestStatus } from '../utils/leaveRequestEligibility';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
 
 type Props = {
@@ -15,6 +19,8 @@ type Props = {
   workDateIso: string;
   todayIso: string;
   punch?: ShiftPunchRecord;
+  /** 跨天末段：配对首段打卡（上班卡） */
+  pairPunch?: ShiftPunchRecord;
   /** 当日打卡接口已成功返回 */
   punchesKnown?: boolean;
   punchBusy?: boolean;
@@ -27,8 +33,9 @@ type Props = {
   /** 打卡或漏打卡申请已覆盖班次时段，不可请假 */
   leaveApplyBlocked?: boolean;
   missedPunchPendingStatus?: MissedPunchPendingStatus;
-  /** 该班次已有待审批/已通过的请假 */
-  leavePending?: boolean;
+  missedPunchOpen?: ShiftMissedPunchOpenStatus;
+  /** 该班次关联的待审批/已通过请假（用于状态文案） */
+  leaveRequestStatus?: ShiftLeaveRequestStatus;
 };
 
 export function MyShiftCard({
@@ -36,6 +43,7 @@ export function MyShiftCard({
   workDateIso,
   todayIso,
   punch,
+  pairPunch,
   punchesKnown = false,
   punchBusy,
   onClockIn,
@@ -45,11 +53,13 @@ export function MyShiftCard({
   missedPunchApplyBlocked = false,
   leaveApplyBlocked = false,
   missedPunchPendingStatus = 'none',
-  leavePending = false,
+  missedPunchOpen,
+  leaveRequestStatus = 'none',
 }: Props) {
   const { t } = useTranslation();
   const [applyOpen, setApplyOpen] = useState(false);
 
+  const displayRange = slot.range;
   const actions = getShiftCardActions(
     workDateIso,
     slot.range,
@@ -57,13 +67,33 @@ export function MyShiftCard({
     todayIso,
     getApproximateServerNowDate(),
     punchesKnown,
+    slot.overnightRole ?? 'normal',
+    pairPunch,
   );
 
   let statusKey = actions.statusKey;
   let statusParams = actions.statusParams;
   let statusWarn = actions.emphasizeMissedApply;
-  if (actions.showStatus && leavePending) {
+  if (actions.showStatus && leaveRequestStatus === 'pending') {
     statusKey = 'shiftStatusLeavePending';
+    statusParams = undefined;
+    statusWarn = false;
+  } else if (actions.showStatus && leaveRequestStatus === 'approved') {
+    statusKey = 'shiftStatusLeaveApproved';
+    statusParams = undefined;
+    statusWarn = false;
+  } else if (actions.showStatus && missedPunchOpen?.coverage === 'full') {
+    statusKey =
+      missedPunchOpen.approval === 'approved'
+        ? 'shiftStatusMissedPunchApproved'
+        : 'shiftStatusMissedPunchPending';
+    statusParams = undefined;
+    statusWarn = false;
+  } else if (actions.showStatus && missedPunchOpen?.coverage === 'partial') {
+    statusKey =
+      missedPunchOpen.approval === 'approved'
+        ? 'shiftStatusMissedPunchPartialApproved'
+        : 'shiftStatusMissedPunchPartial';
     statusParams = undefined;
     statusWarn = false;
   } else if (actions.showStatus && missedPunchPendingStatus === 'full') {
@@ -82,15 +112,23 @@ export function MyShiftCard({
       : t(statusKey)
     : '';
 
-  const showApplyEntry =
-    actions.showApply && (!missedPunchApplyBlocked || !leaveApplyBlocked);
+  const showMissedApplyAvailable = actions.showMissedApply && !missedPunchApplyBlocked;
+  const leaveApplyAvailable = !leaveApplyBlocked;
+  const showApplyEntry = showMissedApplyAvailable || leaveApplyAvailable;
   const hasSideActions = actions.showClockIn || actions.showClockOut || showApplyEntry;
 
   return (
     <View style={styles.card}>
       <View style={styles.bodyRow}>
         <View style={styles.mainCol}>
-          <Text style={styles.cardTimeHero}>{slot.range}</Text>
+          <View style={styles.timeRow}>
+            <Text style={styles.cardTimeHero}>{displayRange}</Text>
+            {slot.isSubstitution ? (
+              <View style={styles.subBadge}>
+                <Text style={styles.subBadgeText}>{t('scheduleSubstitutionBadge')}</Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={styles.cardMetaLbl}>{t('scheduleRegion')}</Text>
           <Text style={styles.cardMetaVal}>{slot.areaName}</Text>
           <Text style={[styles.cardMetaLbl, styles.cardMetaLblAfter]}>{t('scheduleShift')}</Text>
@@ -164,7 +202,7 @@ export function MyShiftCard({
 
             {applyOpen ? (
               <View style={styles.applyMenu}>
-                {missedPunchApplyBlocked ? null : (
+                {showMissedApplyAvailable ? (
                   <Pressable
                     onPress={() => {
                       setApplyOpen(false);
@@ -173,6 +211,7 @@ export function MyShiftCard({
                     style={[
                       styles.applyItem,
                       actions.emphasizeMissedApply && styles.applyItemHighlight,
+                      leaveApplyAvailable ? undefined : styles.applyItemLast,
                     ]}
                   >
                     <Text
@@ -184,8 +223,8 @@ export function MyShiftCard({
                       {t('shiftApplyMissed')}
                     </Text>
                   </Pressable>
-                )}
-                {leaveApplyBlocked ? null : (
+                ) : null}
+                {leaveApplyAvailable ? (
                   <Pressable
                     onPress={() => {
                       setApplyOpen(false);
@@ -195,7 +234,7 @@ export function MyShiftCard({
                   >
                     <Text style={styles.applyItemText}>{t('shiftApplyLeave')}</Text>
                   </Pressable>
-                )}
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -227,6 +266,12 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: 8,
   },
+  timeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardTimeHero: {
     fontSize: 20,
     fontWeight: '800',
@@ -242,6 +287,15 @@ const styles = StyleSheet.create({
   },
   cardMetaLblAfter: { marginTop: 8 },
   cardMetaVal: { marginTop: 2, fontSize: 13, fontWeight: '500', color: colors.textMuted, lineHeight: 18 },
+  subBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: '#f3e8ff',
+    borderWidth: 1,
+    borderColor: '#c4b5fd',
+  },
+  subBadgeText: { fontSize: 11, fontWeight: '800', color: '#6d28d9' },
   statusRow: {
     marginTop: 10,
     alignSelf: 'flex-start',

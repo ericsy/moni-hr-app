@@ -1,6 +1,7 @@
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { RequestShiftBinding } from '../context/AuthContext';
 import {
+  buildLegacyCellKey,
   buildShiftKeyFromBinding,
   buildShiftKeyFromTarget,
   shiftMatchTargetFromSlot,
@@ -20,6 +21,8 @@ export function buildShiftBinding(
     areaName: slot.areaName,
     shiftName: slot.shiftName,
     scheduledRange: slot.range,
+    overnightRole: slot.overnightRole,
+    overnightPairCellId: slot.overnightPairCellId,
   };
 }
 
@@ -57,13 +60,16 @@ export function enrichShiftBindingsFromSchedule(
   });
 }
 
-/** 选中/去重班次：用快照键，不用 publishedCellId */
+/** 选班 UI / 本地选中态：用当前格子 id，避免同日相同时段多班碰撞 */
 export function shiftSelectionKeyFromSlot(workDate: string, slot: MyPublishedShiftSlot): string {
-  return buildShiftKeyFromTarget(shiftMatchTargetFromSlot(workDate, slot));
+  return buildLegacyCellKey(workDate, slot.id);
 }
 
 export function shiftSelectionKeyFromBinding(shift: RequestShiftBinding): string {
-  return buildShiftKeyFromBinding(shift) || `${shift.workDate}|${shift.scheduleId ?? shift.slotIndex}`;
+  if (shift.workDate && shift.scheduleId) {
+    return buildLegacyCellKey(shift.workDate, shift.scheduleId);
+  }
+  return buildShiftKeyFromBinding(shift) || `${shift.workDate}|${shift.slotIndex}`;
 }
 
 /** @deprecated 优先用 shiftSelectionKeyFromSlot */
@@ -79,8 +85,11 @@ export function findSlotForSelectionKey(
   if (!parsed) return null;
   const slots = scheduleByDate[parsed.workDate] ?? [];
   const slotIndex = slots.findIndex((s) => {
-    if (parsed.slotId.startsWith('t:') || parsed.slotId.startsWith('cell:')) {
+    if (parsed.slotId.startsWith('cell:')) {
       return shiftSelectionKeyFromSlot(parsed.workDate, s) === parsed.slotId;
+    }
+    if (parsed.slotId.startsWith('t:')) {
+      return buildShiftKeyFromTarget(shiftMatchTargetFromSlot(parsed.workDate, s)) === parsed.slotId;
     }
     return s.id === parsed.slotId;
   });
