@@ -26,7 +26,6 @@ import {
 import { normalizeSubmitReason } from '../../src/api/mapAttendanceRequest';
 import { fetchMyPublishedSchedule } from '../../src/api/schedule';
 import { TimeSelectField } from '../../src/components/TimeSelectField';
-import { CalendarDatePickerModal } from '../../src/components/CalendarDatePickerModal';
 import type { LeaveRequest } from '../../src/context/AuthContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
@@ -45,14 +44,17 @@ import {
 } from '../../src/utils/missedPunchEligibility';
 import {
   addDaysLocal,
-  compareDateKeys,
-  compareHm,
-  defaultPartialFromShiftRange,
   hmFromShiftRange,
   parseDateKey,
-  parseScheduledHmRange,
   startOfWeekMondayLocal,
 } from '../../src/utils/localDateTime';
+import {
+  clampPartialLeaveToScenario,
+  defaultPartialLeaveForPunch,
+  isPartialLeaveValidForScenario,
+  resolvePartialLeaveScenario,
+  type PartialLeaveScenario,
+} from '../../src/utils/partialLeaveConstraints';
 import {
   buildShiftBinding,
   findSlotForSelectionKey,
@@ -139,13 +141,6 @@ export default function RequestCreateScreen() {
   const [partialLeaveByKey, setPartialLeaveByKey] = useState<
     Record<string, { from: string; to: string }>
   >({});
-  const [leaveWindowStartIso, setLeaveWindowStartIso] = useState(() =>
-    calendarDateKey(startOfWeekMondayLocal(getApproximateServerNowDate())),
-  );
-  const [leaveWindowEndIso, setLeaveWindowEndIso] = useState(() =>
-    calendarDateKey(addDaysLocal(startOfWeekMondayLocal(getApproximateServerNowDate()), 6)),
-  );
-  const [leaveCalendarOpen, setLeaveCalendarOpen] = useState<'start' | 'end' | null>(null);
   /** 提交成功准备跳转时关闭时间滚轮，避免 Android Modal 与页面卸载竞态 */
   const [leavePickersEnabled, setLeavePickersEnabled] = useState(true);
   const closingAfterSubmitRef = useRef(false);
@@ -268,27 +263,10 @@ export default function RequestCreateScreen() {
   }, [selectedSlot?.id, selectedSlot?.overnightRole]);
 
   const leaveWeekStartIso = useMemo(() => calendarDateKey(leaveWeekStart), [leaveWeekStart]);
-
-  const leaveWindowLowHigh = useMemo(() => {
-    const lo =
-      compareDateKeys(leaveWindowStartIso, leaveWindowEndIso) <= 0
-        ? leaveWindowStartIso
-        : leaveWindowEndIso;
-    const hi =
-      compareDateKeys(leaveWindowStartIso, leaveWindowEndIso) <= 0
-        ? leaveWindowEndIso
-        : leaveWindowStartIso;
-    return { lo, hi };
-  }, [leaveWindowStartIso, leaveWindowEndIso]);
-
-  const leaveScheduleFetchFromIso = useMemo(
-    () => calendarDateKey(startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.lo))),
-    [leaveWindowLowHigh.lo],
-  );
+  const leaveScheduleFetchFromIso = leaveWeekStartIso;
   const leaveScheduleFetchToIso = useMemo(
-    () =>
-      calendarDateKey(addDaysLocal(startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.hi)), 6)),
-    [leaveWindowLowHigh.hi],
+    () => calendarDateKey(addDaysLocal(leaveWeekStart, 6)),
+    [leaveWeekStart],
   );
 
   const leaveWeekDays = useMemo(() => {
@@ -298,34 +276,17 @@ export default function RequestCreateScreen() {
     });
   }, [leaveWeekStart]);
 
-  const applyLeaveWindowDate = useCallback(
-    (which: 'start' | 'end', iso: string) => {
-      if (which === 'start') {
-        setLeaveWindowStartIso(iso);
-        if (compareDateKeys(iso, leaveWindowEndIso) > 0) setLeaveWindowEndIso(iso);
-      } else {
-        setLeaveWindowEndIso(iso);
-        if (compareDateKeys(iso, leaveWindowStartIso) < 0) setLeaveWindowStartIso(iso);
-      }
-    },
-    [leaveWindowEndIso, leaveWindowStartIso],
-  );
-
   const goPrevLeaveWeekNav = useCallback(() => {
     const next = addDaysLocal(leaveWeekStart, -7);
-    const firstMon = startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.lo));
-    if (next.getTime() < firstMon.getTime()) return;
     setLeaveWeekStart(next);
     setLeaveFocusDay(calendarDateKey(next));
-  }, [leaveWeekStart, leaveWindowLowHigh.lo]);
+  }, [leaveWeekStart]);
 
   const goNextLeaveWeekNav = useCallback(() => {
     const next = addDaysLocal(leaveWeekStart, 7);
-    const lastMon = startOfWeekMondayLocal(parseDateKey(leaveWindowLowHigh.hi));
-    if (next.getTime() > lastMon.getTime()) return;
     setLeaveWeekStart(next);
     setLeaveFocusDay(calendarDateKey(next));
-  }, [leaveWeekStart, leaveWindowLowHigh.hi]);
+  }, [leaveWeekStart]);
 
   const weekdayAbbr = useMemo(() => t('weekdayAbbrList').split(',').map((s) => s.trim()), [t]);
 
@@ -339,14 +300,6 @@ export default function RequestCreateScreen() {
   const focusedSlots = useMemo(
     () => publishedScheduleByDate[leaveFocusDay] ?? [],
     [publishedScheduleByDate, leaveFocusDay],
-  );
-
-  const resolveSlotRange = useCallback(
-    (key: string): string | null => {
-      const found = findSlotForSelectionKey(publishedScheduleByDate, key);
-      return found?.slot.range ?? null;
-    },
-    [publishedScheduleByDate],
   );
 
   useEffect(() => {
@@ -374,7 +327,7 @@ export default function RequestCreateScreen() {
     });
   }, [type, selectedShiftKeys]);
 
-  /** 已选「部分时段」但尚未写入时间时，用班次起止补全（不覆盖已有设置） */
+  /** 已选「部分时段」但尚未写入时间时，按打卡/班次补全默认（不覆盖已有设置） */
   useEffect(() => {
     if (type !== 'leave') return;
     setPartialLeaveByKey((prev) => {
@@ -382,9 +335,10 @@ export default function RequestCreateScreen() {
       let changed = false;
       for (const key of Object.keys(selectedShiftKeys)) {
         if ((leaveScopeByKey[key] ?? 'full') !== 'partial' || next[key]) continue;
-        const range = resolveSlotRange(key);
-        if (!range) continue;
-        const def = defaultPartialFromShiftRange(range);
+        const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+        if (!found) continue;
+        const punch = getShiftPunch(found.workDate, found.slot);
+        const def = defaultPartialLeaveForPunch(punch, found.slot.range);
         if (def) {
           next[key] = def;
           changed = true;
@@ -392,22 +346,52 @@ export default function RequestCreateScreen() {
       }
       return changed ? next : prev;
     });
-  }, [type, selectedShiftKeys, leaveScopeByKey, resolveSlotRange]);
+  }, [type, selectedShiftKeys, leaveScopeByKey, publishedScheduleByDate, getShiftPunch]);
 
   const leavePartialValid = useMemo(() => {
     if (type !== 'leave') return true;
     for (const shift of selectedLeaveShifts) {
       const key = shiftSelectionKeyFromBinding(shift);
       if ((leaveScopeByKey[key] ?? 'full') !== 'partial') continue;
-      const bounds = parseScheduledHmRange(shift.scheduledRange);
+      const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+      if (!found) return false;
+      const punch = getShiftPunch(found.workDate, found.slot);
+      const scenario = resolvePartialLeaveScenario(punch, found.slot.range);
       const p = partialLeaveByKey[key];
-      if (!bounds || !p) return false;
-      if (compareHm(p.from, p.to) >= 0) return false;
-      if (compareHm(p.from, bounds.start) < 0) return false;
-      if (compareHm(p.to, bounds.end) > 0) return false;
+      if (!isPartialLeaveValidForScenario(p, scenario, found.slot.range)) return false;
     }
     return true;
-  }, [type, selectedLeaveShifts, leaveScopeByKey, partialLeaveByKey]);
+  }, [
+    type,
+    selectedLeaveShifts,
+    leaveScopeByKey,
+    partialLeaveByKey,
+    publishedScheduleByDate,
+    getShiftPunch,
+  ]);
+
+  /** 打卡加载后，将已选部分时段限制在可请假范围内 */
+  useEffect(() => {
+    if (type !== 'leave') return;
+    setPartialLeaveByKey((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const key of Object.keys(selectedShiftKeys)) {
+        if ((leaveScopeByKey[key] ?? 'full') !== 'partial' || !next[key]) continue;
+        const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+        if (!found) continue;
+        const punch = getShiftPunch(found.workDate, found.slot);
+        const scenario = resolvePartialLeaveScenario(punch, found.slot.range);
+        if (!scenario) continue;
+        const clamped = clampPartialLeaveToScenario(next[key], scenario);
+        if (clamped.from !== next[key].from || clamped.to !== next[key].to) {
+          next[key] = clamped;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [type, selectedShiftKeys, leaveScopeByKey, publishedScheduleByDate, shiftPunches, getShiftPunch]);
 
   const dateLang = language ?? i18n.language;
   const leaveWeekNav = useMemo(
@@ -488,40 +472,6 @@ export default function RequestCreateScreen() {
     if (type !== 'leave' || !selectedStoreId) return;
     void loadLeaveWeekSchedule();
   }, [type, selectedStoreId, loadLeaveWeekSchedule]);
-
-  useEffect(() => {
-    if (type !== 'leave') return;
-    const { lo, hi } = leaveWindowLowHigh;
-    const firstMon = startOfWeekMondayLocal(parseDateKey(lo));
-    const lastMon = startOfWeekMondayLocal(parseDateKey(hi));
-    setLeaveWeekStart((prev) => {
-      if (prev.getTime() < firstMon.getTime()) return firstMon;
-      if (prev.getTime() > lastMon.getTime()) return lastMon;
-      return prev;
-    });
-    setLeaveFocusDay((fd) => {
-      if (compareDateKeys(fd, lo) < 0) return lo;
-      if (compareDateKeys(fd, hi) > 0) return hi;
-      return fd;
-    });
-  }, [type, leaveWindowLowHigh]);
-
-  useEffect(() => {
-    if (type !== 'leave') return;
-    const { lo, hi } = leaveWindowLowHigh;
-    setSelectedShiftKeys((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const key of Object.keys(next)) {
-        const wd = parseShiftSelectionKey(key)?.workDate;
-        if (!wd || compareDateKeys(wd, lo) < 0 || compareDateKeys(wd, hi) > 0) {
-          delete next[key];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [type, leaveWindowLowHigh]);
 
   const refreshPageData = useCallback(async () => {
     await refreshAttendanceRequests();
@@ -607,21 +557,23 @@ export default function RequestCreateScreen() {
         if (!parsed || prev[key]) continue;
         const found = findSlotForSelectionKey(publishedScheduleByDate, key);
         if (!found || !isFullLeaveBlocked(found.slot, found.workDate)) continue;
-        const def = defaultPartialFromShiftRange(found.slot.range);
+        const punch = getShiftPunch(found.workDate, found.slot);
+        const def = defaultPartialLeaveForPunch(punch, found.slot.range);
         if (!def) continue;
         nextPartial[key] = def;
         partialChanged = true;
       }
       return partialChanged ? nextPartial : prev;
     });
-  }, [type, selectedShiftKeys, publishedScheduleByDate, isFullLeaveBlocked]);
+  }, [type, selectedShiftKeys, publishedScheduleByDate, isFullLeaveBlocked, getShiftPunch]);
 
   const updatePartialLeave = useCallback(
-    (key: string, patch: Partial<{ from: string; to: string }>) => {
+    (key: string, patch: Partial<{ from: string; to: string }>, scenario: PartialLeaveScenario | null) => {
       setPartialLeaveByKey((prev) => {
         const cur = prev[key];
-        if (!cur) return prev;
-        return { ...prev, [key]: { ...cur, ...patch } };
+        if (!cur || !scenario) return prev;
+        const merged = clampPartialLeaveToScenario({ ...cur, ...patch }, scenario);
+        return { ...prev, [key]: merged };
       });
     },
     [],
@@ -637,12 +589,13 @@ export default function RequestCreateScreen() {
       if (mode === 'partial') {
         setPartialLeaveByKey((prev) => {
           if (prev[key]) return prev;
-          const def = defaultPartialFromShiftRange(slot.range);
+          const punch = getShiftPunch(workDate, slot);
+          const def = defaultPartialLeaveForPunch(punch, slot.range);
           return def ? { ...prev, [key]: def } : prev;
         });
       }
     },
-    [isFullLeaveBlocked, t],
+    [isFullLeaveBlocked, t, getShiftPunch],
   );
 
   const toggleShiftKey = (key: string, slot: MyPublishedShiftSlot, workDate: string) => {
@@ -662,7 +615,8 @@ export default function RequestCreateScreen() {
     });
     if (selecting && isFullLeaveBlocked(slot, workDate)) {
       setLeaveScopeByKey((prev) => ({ ...prev, [key]: 'partial' }));
-      const def = defaultPartialFromShiftRange(slot.range);
+      const punch = getShiftPunch(workDate, slot);
+      const def = defaultPartialLeaveForPunch(punch, slot.range);
       if (def) {
         setPartialLeaveByKey((prev) => (prev[key] ? prev : { ...prev, [key]: def }));
       }
@@ -726,8 +680,6 @@ export default function RequestCreateScreen() {
     }
 
     if (nextType === 'leave') {
-      setLeaveWindowStartIso(calendarDateKey(weekStart));
-      setLeaveWindowEndIso(calendarDateKey(addDaysLocal(weekStart, 6)));
       const nextKeys = slot ? { [shiftSelectionKeyFromSlot(date, slot)]: true as const } : {};
       const nextKey = Object.keys(nextKeys)[0] ?? '';
       setSelectedShiftKeys((prev) => {
@@ -778,8 +730,6 @@ export default function RequestCreateScreen() {
     if (closingAfterSubmitRef.current) return;
     closingAfterSubmitRef.current = true;
     setLeavePickersEnabled(false);
-    setLeaveCalendarOpen(null);
-    // MIUI/Android 13/Imin：提交成功后立即清 context / 切页易与键盘、时间滚轮 Modal 卸载竞态崩溃。
     Keyboard.dismiss();
     const navigate = () => router.replace('/requests');
     if (Platform.OS === 'android') {
@@ -905,7 +855,6 @@ export default function RequestCreateScreen() {
 
   const closeCreate = () => {
     setLeavePickersEnabled(false);
-    setLeaveCalendarOpen(null);
     Keyboard.dismiss();
     const back = () => {
       setRequestScheduleContext(null);
@@ -1108,7 +1057,6 @@ export default function RequestCreateScreen() {
   };
 
   const renderLeaveForm = () => {
-    const { lo: winLo, hi: winHi } = leaveWindowLowHigh;
     const focusedSelectedCount = countSelectedOnDay(leaveFocusDay);
     const selectableFocusedSlots = focusedSlots.filter(
       (s) => !isShiftLeaveBlocked(s, leaveFocusDay),
@@ -1140,26 +1088,6 @@ export default function RequestCreateScreen() {
         </View>
 
         <Text style={styles.leaveCalendarHint}>{t('leaveShiftCalendarHint')}</Text>
-        <View style={styles.leaveDatePickRow}>
-          <View style={styles.leaveDatePickCol}>
-            <Text style={styles.label}>{t('leaveShiftPeriodStart')}</Text>
-            <Pressable onPress={() => setLeaveCalendarOpen('start')} style={styles.leaveDatePickBtn}>
-              <Text style={styles.leaveDatePickBtnText} numberOfLines={1}>
-                {formatPunchHeaderDate(leaveWindowStartIso, dateLang)}
-              </Text>
-              <Ionicons color={colors.primary} name="calendar-outline" size={18} />
-            </Pressable>
-          </View>
-          <View style={styles.leaveDatePickCol}>
-            <Text style={styles.label}>{t('leaveShiftPeriodEnd')}</Text>
-            <Pressable onPress={() => setLeaveCalendarOpen('end')} style={styles.leaveDatePickBtn}>
-              <Text style={styles.leaveDatePickBtnText} numberOfLines={1}>
-                {formatPunchHeaderDate(leaveWindowEndIso, dateLang)}
-              </Text>
-              <Ionicons color={colors.primary} name="calendar-outline" size={18} />
-            </Pressable>
-          </View>
-        </View>
 
         <View style={styles.weekBar}>
           <Pressable hitSlop={8} onPress={goPrevLeaveWeekNav} style={styles.weekChevron}>
@@ -1180,21 +1108,11 @@ export default function RequestCreateScreen() {
             const weekdayIdx = (day.date.getDay() + 6) % 7;
             const hasWork = (publishedScheduleByDate[day.iso]?.length ?? 0) > 0;
             const picked = countSelectedOnDay(day.iso);
-            const inWindow =
-              compareDateKeys(day.iso, winLo) >= 0 && compareDateKeys(day.iso, winHi) <= 0;
             return (
               <Pressable
                 key={day.iso}
-                disabled={!inWindow}
-                onPress={() => {
-                  if (!inWindow) return;
-                  setLeaveFocusDay(day.iso);
-                }}
-                style={[
-                  styles.dayCell,
-                  active && styles.dayCellActive,
-                  !inWindow && styles.dayCellMuted,
-                ]}
+                onPress={() => setLeaveFocusDay(day.iso)}
+                style={[styles.dayCell, active && styles.dayCellActive]}
               >
                 <Text style={[styles.dayCellWeek, active && styles.dayCellWeekActive]} numberOfLines={1}>
                   {weekdayAbbr[weekdayIdx] ?? ''}
@@ -1251,15 +1169,21 @@ export default function RequestCreateScreen() {
               const punch = getShiftPunch(leaveFocusDay, slot);
               const punchLine = formatShiftPunchLine(punch, i18n.language);
               const fullLeaveBlocked = isFullLeaveBlocked(slot, leaveFocusDay);
-              const slotBounds = parseScheduledHmRange(slot.range);
+              const partialScenario = resolvePartialLeaveScenario(punch, slot.range);
               const scope = leaveScopeByKey[key] ?? (fullLeaveBlocked ? 'partial' : 'full');
+              const partialDefault =
+                partialScenario && defaultPartialLeaveForPunch(punch, slot.range);
               const partial =
                 partialLeaveByKey[key] ??
-                (scope === 'partial' && slotBounds
-                  ? { from: slotBounds.start, to: slotBounds.end }
-                  : undefined);
+                (scope === 'partial' && partialDefault ? partialDefault : undefined);
               const showPerShiftPartial =
-                checked && !blocked && scope === 'partial' && slotBounds && partial;
+                checked && !blocked && scope === 'partial' && partialScenario && partial;
+              const partialHintKey =
+                partialScenario?.kind === 'late_arrival'
+                  ? 'leavePartialLateArrivalHint'
+                  : partialScenario?.kind === 'early_departure'
+                    ? 'leavePartialEarlyDepartureHint'
+                    : null;
               return (
                 <View
                   key={key}
@@ -1364,13 +1288,19 @@ export default function RequestCreateScreen() {
                   ) : null}
                   {showPerShiftPartial ? (
                     <View style={styles.shiftPartialTime}>
+                      {partialHintKey ? (
+                        <Text style={styles.shiftPartialHint}>{t(partialHintKey)}</Text>
+                      ) : null}
                       <View style={styles.leaveTimeRangeRow}>
                         <View style={styles.leaveTimeCol}>
                           <Text style={styles.leaveTimeColLabel}>{t('leaveTimeFrom')}</Text>
                           <TimeSelectField
                             value={partial.from}
-                            onChange={(v) => updatePartialLeave(key, { from: v })}
-                            wheelAnchor={slotBounds.start}
+                            onChange={(v) => updatePartialLeave(key, { from: v }, partialScenario)}
+                            wheelAnchor={partial.from}
+                            minHm={partialScenario.fromMin}
+                            maxHm={partialScenario.fromMax}
+                            locked={!!partialScenario.fromFixed}
                             disabled={!leavePickersEnabled}
                           />
                         </View>
@@ -1379,8 +1309,11 @@ export default function RequestCreateScreen() {
                           <Text style={styles.leaveTimeColLabel}>{t('leaveTimeTo')}</Text>
                           <TimeSelectField
                             value={partial.to}
-                            onChange={(v) => updatePartialLeave(key, { to: v })}
-                            wheelAnchor={slotBounds.end}
+                            onChange={(v) => updatePartialLeave(key, { to: v }, partialScenario)}
+                            wheelAnchor={partial.to}
+                            minHm={partialScenario.toMin}
+                            maxHm={partialScenario.toMax}
+                            locked={!!partialScenario.toFixed}
                             disabled={!leavePickersEnabled}
                           />
                         </View>
@@ -1467,18 +1400,6 @@ export default function RequestCreateScreen() {
           </Pressable>
         </View>
       </View>
-      {type === 'leave' && leaveCalendarOpen ? (
-        <CalendarDatePickerModal
-          visible
-          title={
-            leaveCalendarOpen === 'end' ? t('leaveShiftPeriodEnd') : t('leaveShiftPeriodStart')
-          }
-          anchorIso={leaveCalendarOpen === 'end' ? leaveWindowEndIso : leaveWindowStartIso}
-          minIso={leaveCalendarOpen === 'end' ? leaveWindowStartIso : undefined}
-          onRequestClose={() => setLeaveCalendarOpen(null)}
-          onSelectDate={(iso) => applyLeaveWindowDate(leaveCalendarOpen, iso)}
-        />
-      ) : null}
     </>
   );
 }
@@ -1603,24 +1524,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  dayCellMuted: { opacity: 0.38 },
   leaveCalendarHint: { marginTop: 10, fontSize: 12, color: colors.textMuted, lineHeight: 17 },
-  leaveDatePickRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  leaveDatePickCol: { flex: 1, minWidth: 0 },
-  leaveDatePickBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginTop: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  leaveDatePickBtnText: { flex: 1, fontSize: 14, fontWeight: '700', color: colors.text },
   dayCellWeek: {
     fontSize: 10,
     fontWeight: '700',
@@ -1749,6 +1653,13 @@ const styles = StyleSheet.create({
   shiftScopeBlock: { marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   shiftScopeLabel: { fontSize: 12, fontWeight: '700', color: colors.textMuted, marginBottom: 8 },
   shiftPartialTime: { marginTop: 10 },
+  shiftPartialHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: colors.textMuted,
+    marginBottom: 8,
+  },
   chipCompact: { paddingVertical: 8, paddingHorizontal: 12 },
   slotList: { marginTop: 8, gap: 8 },
   slotCard: {

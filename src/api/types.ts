@@ -93,6 +93,35 @@ export type AppEmployeePublishedSchedule = {
   items: AppEmployeeScheduleItem[];
 };
 
+export type AppStoreRosterStatus = 'normal' | 'substitution' | 'on_leave';
+
+export type AppStoreScheduleEmployee = {
+  id: number;
+  name: string;
+  rosterStatus?: AppStoreRosterStatus | null;
+};
+
+export type AppStoreScheduleItem = {
+  id: number;
+  areaId: number;
+  areaName: string;
+  shiftId: number;
+  shiftName: string;
+  date_str: string;
+  startTime: string;
+  endTime: string;
+  color?: string | null;
+  isSubstitution?: boolean;
+  substitutionId?: number | null;
+  originalDisplayName?: string | null;
+  employees: AppStoreScheduleEmployee[];
+};
+
+export type AppStorePublishedSchedule = {
+  storeId: number;
+  items: AppStoreScheduleItem[];
+};
+
 export type AppClockPunchRequest = {
   publishedCellId: number;
   punchType: 'clock_in' | 'clock_out';

@@ -1,5 +1,37 @@
 # moni-hr-app 变更日志
 
+## 2026-06-10
+
+- **按班次请假去掉顶部日期区间**：**`request-create`** 移除「请假开始/结束日期」选择与日历弹窗；按当前周加载排班，左右切换周不再受日期区间限制；说明文案已更新；修复路由入参 **`applyRouteParams`** 仍调用已删 **`setLeaveWindowStartIso`** 的报错。
+
+- **部分请假时段按打卡约束**：已打卡时部分请假不再可在整段排班内随意填；迟到仅可请「班次开始～上班打卡」（如 8:00–14:32），早退仅可请「下班打卡～班次结束」；**`partialLeaveConstraints.ts`** + **`TimeSelectField`** min/max/locked。
+
+- **周排班页标题**：导航栏为 **`scheduleWeekTitle`**（周排班 / Weekly schedule）；移除页内重复大标题及「打卡记录」「申请记录」快捷入口（Tab 排班首页保留）。
+
+- **店铺排班请假标色**：后端有替班时原员工（如 yu3333）应返回 **`on_leave`**；需部署最新 **`moni-hr`** 后 App 才显示琥珀色请假胶囊。
+
+- **店铺排班区分正常/替班/请假**：**`mapStorePublishedSchedule`** 保留 **`rosterStatus`**，替班与普通班次分开展示；**`schedule-week`** 胶囊样式区分（蓝=正常、紫=替班、琥珀=请假）、替班行显示「替 xxx」；图例单行置于周历下方；i18n **`storeRoster*`**。
+
+- **店铺排班接真实 API**：**`schedule-week.tsx`** 移除 **`STORE_DAY_ROSTER_BY_STORE`** 演示数据；店长/副店长切换「店铺排班」时调用 **`GET /api/v1/app/schedule/store-published`**（**`fetchStorePublishedSchedule`**）；**`mapStorePublishedSchedule.ts`** 按日期/区域/班次聚合员工；展示真实区域名、班次名与员工姓名；加载/错误/下拉刷新与「我的排班」一致。
+
+## 2026-06-08
+
+- **今日班次 · 英文胶囊文案**：**`TodayShiftRow`** 去掉固定 76px 宽度，状态/「Request」按内容撑开；请假状态改用短文案 **`shiftBadgeLeavePending`** 等。
+
+- **漏打卡可申请时机**：按本段排班 **应打卡时刻** 判断（上班=开始、下班=结束），不再等到整段延长打卡窗结束；同日多班不重叠，第二班 17:30 后即可在「申请」中看到漏打卡（`shiftClockWindow.ts`）。
+
+- **排班首页 · 今日班次右侧**：打卡状态与「申请」 **同宽同高**（`actionPill` 固定 76×28）；上下排列。
+
+- **排班首页 · 今日班次右侧**：打卡状态与「申请」改为 **上下排列**（`TodayShiftRow` 右侧列 `column`）。
+
+- **排班首页 · 申请按钮样式**：**`TodayShiftRow`**「申请」改为与打卡状态一致的 **胶囊角标**；菜单改为 **Modal 浮层**（不撑高班次列表），点遮罩关闭。
+
+- **排班首页 · 今日班次申请**：**`TodayShiftRow`** 改回与 **`MyShiftCard`** 一致——按钮文案 **「申请」**，展开可选 **漏打卡 / 请假**。
+
+- **排班页改版（已实施）**：Tab **`schedule.tsx`** 改为今日首页（打卡 Hero、今日班次简表 + 行内请假、**`scheduleViewMore`**）；周视图迁至 **`schedule-week.tsx`**（`MyShiftCard`、店铺排班仅周页）。新增 **`SchedulePunchHeroCard`**、**`TodayShiftRow`**、**`scheduleHeroShift.ts`**。
+
+- **排班页改版（方案）**：Tab 首页为今日打卡大卡 + 今日班次简表 +「点击查看更多排班」；现有周视图/`MyShiftCard`/店铺排班迁至 **`schedule-week`**。**店长店铺视图仅在周页**，首页仅「我的」今日班次。
+
 ## 2026-05-29
 
 - **TestFlight · test 环境**：**`eas.json`** 新增 **`testflight`** profile（`APP_ENV=test`、`distribution: store`、`autoIncrement`）；应用名 **Moni HR Test**，API **`http://test-api.monihr.com`**。构建：`eas build --platform ios --profile testflight`；提交：`eas submit --platform ios --profile testflight`（与 production 共用 **`com.monihr`**，TestFlight 里按构建号区分）。

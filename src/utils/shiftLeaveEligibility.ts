@@ -13,6 +13,8 @@ function hmFromPunchIso(iso: string): string | null {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+export { hmFromPunchIso };
+
 /** 展示用：上班 – 下班（缺一则显示已有） */
 export function formatShiftPunchLine(
   punch: ShiftPunchRecord | undefined,

@@ -14,7 +14,14 @@ import {
 } from 'react-native';
 
 import { colors } from '../theme/colors';
-import { formatHm, parseHm } from '../utils/localDateTime';
+import { formatHm, parseHm, compareHm } from '../utils/localDateTime';
+
+function clampHmValue(hm: string, minHm?: string, maxHm?: string): string {
+  let out = hm;
+  if (minHm && compareHm(out, minHm) < 0) out = minHm;
+  if (maxHm && compareHm(out, maxHm) > 0) out = maxHm;
+  return out;
+}
 
 const ITEM_H = 44;
 const VISIBLE_ROWS = 5;
@@ -28,6 +35,10 @@ type Props = {
   value: string;
   onChange: (hm: string) => void;
   wheelAnchor?: string;
+  minHm?: string;
+  maxHm?: string;
+  /** 固定时刻（如班次开始），不可修改 */
+  locked?: boolean;
   /** 提交成功跳转等场景：禁止打开并关闭已打开的滚轮，避免 Android Modal 与路由卸载竞态崩溃 */
   disabled?: boolean;
 };
@@ -190,9 +201,18 @@ const TimePickerSheet = memo(function TimePickerSheet({
   );
 });
 
-export function TimeSelectField({ value, onChange, wheelAnchor, disabled = false }: Props) {
+export function TimeSelectField({
+  value,
+  onChange,
+  wheelAnchor,
+  minHm,
+  maxHm,
+  locked = false,
+  disabled = false,
+}: Props) {
   const parsed = useMemo(() => parseHm(value), [value]);
   const displayHm = useMemo(() => formatHm(parsed.hour, parsed.minute), [parsed.hour, parsed.minute]);
+  const fieldDisabled = disabled || locked;
 
   const [visible, setVisible] = useState(false);
   const [wheelId, setWheelId] = useState(0);
@@ -200,30 +220,36 @@ export function TimeSelectField({ value, onChange, wheelAnchor, disabled = false
   const [draftMinute, setDraftMinute] = useState(parsed.minute);
 
   useEffect(() => {
-    if (disabled) setVisible(false);
-  }, [disabled]);
+    if (fieldDisabled) setVisible(false);
+  }, [fieldDisabled]);
 
   const open = useCallback(() => {
-    if (disabled) return;
+    if (fieldDisabled) return;
     const anchor = parseHm(wheelAnchor?.trim() || value);
-    setDraftHour(anchor.hour);
-    setDraftMinute(anchor.minute);
+    const clamped = clampHmValue(formatHm(anchor.hour, anchor.minute), minHm, maxHm);
+    const c = parseHm(clamped);
+    setDraftHour(c.hour);
+    setDraftMinute(c.minute);
     setWheelId((id) => id + 1);
     setVisible(true);
-  }, [disabled, value, wheelAnchor]);
+  }, [fieldDisabled, value, wheelAnchor, minHm, maxHm]);
 
   const close = useCallback(() => setVisible(false), []);
 
   const confirm = useCallback(() => {
-    onChange(formatHm(draftHour, draftMinute));
+    onChange(clampHmValue(formatHm(draftHour, draftMinute), minHm, maxHm));
     setVisible(false);
-  }, [onChange, draftHour, draftMinute]);
+  }, [onChange, draftHour, draftMinute, minHm, maxHm]);
 
   return (
     <>
-      <Pressable onPress={open} style={styles.trigger}>
-        <Text style={styles.triggerText}>{displayHm}</Text>
-        <Ionicons color={colors.primary} name="time-outline" size={20} />
+      <Pressable
+        onPress={open}
+        disabled={fieldDisabled}
+        style={[styles.trigger, fieldDisabled && styles.triggerLocked]}
+      >
+        <Text style={[styles.triggerText, fieldDisabled && styles.triggerTextLocked]}>{displayHm}</Text>
+        {!locked ? <Ionicons color={colors.primary} name="time-outline" size={20} /> : null}
       </Pressable>
 
       <TimePickerSheet
@@ -258,6 +284,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.text,
     ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as const } : {}),
+  },
+  triggerLocked: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  triggerTextLocked: {
+    color: colors.textMuted,
   },
   overlay: {
     flex: 1,

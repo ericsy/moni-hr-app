@@ -41,6 +41,7 @@ export default function MainLayout() {
       <Stack.Screen name="request-create" options={{ headerShown: true }} />
       <Stack.Screen name="date-leave-create" options={{ headerShown: true }} />
       <Stack.Screen name="request-detail" options={{ headerShown: true }} />
+      <Stack.Screen name="schedule-week" options={{ headerShown: true }} />
       <Stack.Screen name="punch-records" options={{ headerShown: true }} />
       <Stack.Screen name="change-password" options={{ headerShown: true }} />
     </Stack>

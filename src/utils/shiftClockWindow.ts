@@ -96,7 +96,8 @@ function dateAtMinutes(workDateIso: string, minutes: number, dayOffset = 0): Dat
   return new Date(y, m - 1, d + dayOffset, Math.floor(minutes / 60), minutes % 60, 0, 0);
 }
 
-function missedPunchWindowEndAt(
+/** 漏打卡可申请起点：上班=排班开始时刻，下班=排班结束时刻（同日多班不重叠，按本段应打卡时间判断） */
+function missedPunchEligibleAfter(
   workDateIso: string,
   range: string,
   punchKind: 'in' | 'out',
@@ -106,10 +107,9 @@ function missedPunchWindowEndAt(
   if (!parsed || !workDate) return null;
   const overnight = parsed.endMin <= parsed.startMin;
   if (punchKind === 'in') {
-    return dateAtMinutes(workDate, parsed.endMin, overnight ? 1 : 0);
+    return dateAtMinutes(workDate, parsed.startMin, 0);
   }
-  const endMin = parsed.endMin + CLOCK_OUT_AFTER_END_MIN;
-  return dateAtMinutes(workDate, endMin, overnight ? 1 : 0);
+  return dateAtMinutes(workDate, parsed.endMin, overnight ? 1 : 0);
 }
 
 function nowMinutes(d: Date): number {
@@ -142,8 +142,8 @@ function resolvePunchState(
 
 /**
  * 当前是否已过可申请漏打卡的时刻（仅判断「今天」；历史日期由 canApplyMissedPunchKind 另行处理）。
- * 上班漏打卡：正常上班打卡窗口（至班次结束）已结束；
- * 下班漏打卡：正常下班打卡窗口（班次结束 +20 分钟）已结束。
+ * 上班漏打卡：已过本段排班开始时刻；
+ * 下班漏打卡：已过本段排班结束时刻。
  */
 export function isMissedPunchApplyTimeReached(
   workDateIso: string,
@@ -157,9 +157,9 @@ export function isMissedPunchApplyTimeReached(
   if (!workDate || !today) return false;
   if (compareDateKeys(workDate, today) > 0) return false;
   if (compareDateKeys(workDate, today) < 0) return true;
-  const deadline = missedPunchWindowEndAt(workDate, range, punchKind);
-  if (!deadline) return false;
-  return now.getTime() > deadline.getTime();
+  const eligibleAfter = missedPunchEligibleAfter(workDate, range, punchKind);
+  if (!eligibleAfter) return false;
+  return now.getTime() > eligibleAfter.getTime();
 }
 
 /** @deprecated 请用 isMissedPunchApplyTimeReached */

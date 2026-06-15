@@ -1,16 +1,31 @@
 import { apiRequest } from './client';
-import type { AppEmployeePublishedSchedule } from './types';
+import type { AppEmployeePublishedSchedule, AppStorePublishedSchedule } from './types';
+
+function scheduleQuerySuffix(from?: string, to?: string): string {
+  const q = new URLSearchParams();
+  if (from) q.set('from', from);
+  if (to) q.set('to', to);
+  return q.toString() ? `?${q.toString()}` : '';
+}
 
 export function fetchMyPublishedSchedule(params: {
   storeId: string | number;
   from: string;
   to: string;
 }) {
-  const q = new URLSearchParams();
-  if (params.from) q.set('from', params.from);
-  if (params.to) q.set('to', params.to);
-  const suffix = q.toString() ? `?${q.toString()}` : '';
-  return apiRequest<AppEmployeePublishedSchedule>(`/api/v1/app/schedule/published${suffix}`, {
-    storeId: params.storeId,
-  });
+  return apiRequest<AppEmployeePublishedSchedule>(
+    `/api/v1/app/schedule/published${scheduleQuerySuffix(params.from, params.to)}`,
+    { storeId: params.storeId },
+  );
+}
+
+export function fetchStorePublishedSchedule(params: {
+  storeId: string | number;
+  from: string;
+  to: string;
+}) {
+  return apiRequest<AppStorePublishedSchedule>(
+    `/api/v1/app/schedule/store-published${scheduleQuerySuffix(params.from, params.to)}`,
+    { storeId: params.storeId },
+  );
 }
