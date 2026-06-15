@@ -2,6 +2,12 @@
 
 ## 2026-06-10
 
+- **App 版本更新**：
+  - **`GET /api/v1/app/version-check`**（启动与回前台检查；低于 minVersion 强制更新，否则可选更新每 **`promptToken`** 只弹一次）。
+  - 全站 API 请求头自动携带 **`X-App-Version`**、**`X-App-Platform`**（**`appClientMeta.ts`**）；版本检查接口不再传 query 参数。
+  - **`AppUpdateProvider`** + **`AppUpdateModal`**；跳转 **`storeUrl`**（iOS App Store / Android Google Play）。
+  - 平台在 **`moni-hr-platform`**「App 版本管理」配置版本、审核状态与商店链接。
+
 - **按班次请假去掉顶部日期区间**：**`request-create`** 移除「请假开始/结束日期」选择与日历弹窗；按当前周加载排班，左右切换周不再受日期区间限制；说明文案已更新；修复路由入参 **`applyRouteParams`** 仍调用已删 **`setLeaveWindowStartIso`** 的报错。
 
 - **部分请假时段按打卡约束**：已打卡时部分请假不再可在整段排班内随意填；迟到仅可请「班次开始～上班打卡」（如 8:00–14:32），早退仅可请「下班打卡～班次结束」；**`partialLeaveConstraints.ts`** + **`TimeSelectField`** min/max/locked。

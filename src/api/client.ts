@@ -1,5 +1,6 @@
 import { API_BASE_URL } from './config';
 import type { ApiLang, ApiResult } from './types';
+import { getAppClientHeaders } from '../utils/appClientMeta';
 import { syncServerTimeFromHttpDateHeader } from '../utils/serverClock';
 
 export class ApiError extends Error {
@@ -69,6 +70,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'X-Lang': langGetter(),
+    ...getAppClientHeaders(),
   };
 
   if (storeId != null && String(storeId).trim() !== '') {
