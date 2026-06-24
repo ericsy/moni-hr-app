@@ -357,8 +357,10 @@ export default function RequestCreateScreen() {
       if (!found) return false;
       const punch = getShiftPunch(found.workDate, found.slot);
       const scenario = resolvePartialLeaveScenario(punch, found.slot.range);
-      const p = partialLeaveByKey[key];
-      if (!isPartialLeaveValidForScenario(p, scenario, found.slot.range)) return false;
+      const partialDefault =
+        scenario && defaultPartialLeaveForPunch(punch, found.slot.range);
+      const p = partialLeaveByKey[key] ?? partialDefault ?? undefined;
+      if (!isPartialLeaveValidForScenario(p, scenario, found.slot.range, punch)) return false;
     }
     return true;
   }, [
@@ -776,7 +778,11 @@ export default function RequestCreateScreen() {
         const key = shiftSelectionKeyFromBinding(shift);
         const scope = leaveScopeByKey[key] ?? 'full';
         if (scope === 'partial') {
-          const p = partialLeaveByKey[key];
+          const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+          const punch = found ? getShiftPunch(found.workDate, found.slot) : undefined;
+          const def =
+            found && defaultPartialLeaveForPunch(punch, found.slot.range);
+          const p = partialLeaveByKey[key] ?? def;
           if (p?.from && p?.to) {
             leaveTimesByScheduleKey[key] = { mode: 'partial', from: p.from, to: p.to };
           } else {
@@ -1179,11 +1185,13 @@ export default function RequestCreateScreen() {
               const showPerShiftPartial =
                 checked && !blocked && scope === 'partial' && partialScenario && partial;
               const partialHintKey =
-                partialScenario?.kind === 'late_arrival'
-                  ? 'leavePartialLateArrivalHint'
+                partialScenario?.kind === 'clocked_in_only'
+                  ? 'leavePartialClockedInHint'
                   : partialScenario?.kind === 'early_departure'
                     ? 'leavePartialEarlyDepartureHint'
-                    : null;
+                    : partialScenario?.kind === 'late_arrival_with_out'
+                      ? 'leavePartialLateArrivalHint'
+                      : null;
               return (
                 <View
                   key={key}

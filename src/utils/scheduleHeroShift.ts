@@ -45,7 +45,32 @@ export function minutesUntilShiftStart(range: string, now: Date = getApproximate
 
 type PunchLookup = (slot: MyPublishedShiftSlot) => ShiftPunchRecord | undefined;
 
-/** 今日多班时：优先可下班打卡 → 可上班打卡 → 即将开始 → 第一班 */
+function hasClockedInNotOut(
+  slot: MyPublishedShiftSlot,
+  punch: ShiftPunchRecord | undefined,
+  pairPunch: ShiftPunchRecord | undefined,
+): boolean {
+  const role = slot.overnightRole ?? 'normal';
+  const hasIn =
+    role === 'end'
+      ? !!(pairPunch?.clockInAt || punch?.clockInAt)
+      : !!punch?.clockInAt;
+  const hasOut = role === 'start' ? false : !!punch?.clockOutAt;
+  return hasIn && !hasOut;
+}
+
+function isShiftPunchComplete(
+  slot: MyPublishedShiftSlot,
+  punch: ShiftPunchRecord | undefined,
+  pairPunch: ShiftPunchRecord | undefined,
+): boolean {
+  const role = slot.overnightRole ?? 'normal';
+  if (role === 'start') return !!punch?.clockInAt;
+  if (role === 'end') return !!punch?.clockOutAt;
+  return !!punch?.clockInAt && !!punch?.clockOutAt;
+}
+
+/** 今日多班时：优先可下班打卡 → 已上班未下班 → 可上班打卡 → 即将开始 → 已完成置后 */
 export function pickHeroShiftIndex(
   slots: MyPublishedShiftSlot[],
   workDateIso: string,
@@ -59,21 +84,26 @@ export function pickHeroShiftIndex(
 
   const score = (i: number): number => {
     const s = slots[i];
+    const punch = getPunch(s);
+    const pairPunch = getPairPunch(s);
     const actions = getShiftCardActions(
       workDateIso,
       s.range,
-      getPunch(s),
+      punch,
       todayIso,
       now,
       punchesKnown,
       s.overnightRole ?? 'normal',
-      getPairPunch(s),
+      pairPunch,
     );
     if (actions.showClockOut) return 0;
-    if (actions.showClockIn) return 1;
-    if (actions.statusKey === 'shiftStatusUpcoming') return 2;
-    if (actions.statusKey === 'shiftStatusFuture') return 3;
-    return 4;
+    if (actions.statusKey === 'shiftStatusCompleted') return 99;
+    if (hasClockedInNotOut(s, punch, pairPunch)) return 1;
+    if (actions.showClockIn) return 2;
+    if (actions.statusKey === 'shiftStatusUpcoming') return 3;
+    if (actions.statusKey === 'shiftStatusFuture') return 4;
+    if (isShiftPunchComplete(s, punch, pairPunch)) return 99;
+    return 5;
   };
 
   let best = 0;
@@ -130,7 +160,11 @@ export function getTodayShiftBadgeKind(
   ) {
     return 'not_started';
   }
-  if (actions.statusKey === 'shiftStatusPastIncomplete') return 'not_punched';
+  if (actions.statusKey === 'shiftStatusPastIncomplete') {
+    const hasIn =
+      !!punch?.clockInAt || (slot.overnightRole === 'end' && !!pairPunch?.clockInAt);
+    return hasIn ? 'clocked_in' : 'not_punched';
+  }
   return 'not_started';
 }
 

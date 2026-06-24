@@ -174,7 +174,7 @@ export default function ScheduleScreen() {
         getPairPunch,
         punchesKnown,
       ),
-    [todayShifts, todayIso, getShiftPunch, getPairPunch, punchesKnown],
+    [todayShifts, todayIso, getShiftPunch, getPairPunch, punchesKnown, shiftPunches],
   );
 
   const heroSlot = heroIndex >= 0 ? todayShifts[heroIndex] : undefined;
@@ -339,6 +339,7 @@ export default function ScheduleScreen() {
           </View>
         ) : heroSlot ? (
           <SchedulePunchHeroCard
+            key={heroSlot.id}
             slot={heroSlot}
             workDateIso={todayIso}
             todayIso={todayIso}

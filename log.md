@@ -1,5 +1,17 @@
 # moni-hr-app 变更日志
 
+## 2026-05-29
+
+- **迟到打满卡仍可部分请假**：… **`toFixed`** = 上班打卡时刻；修复 **`early_out`** 校验误拦（有下班卡时开始<下班仍合法）；提交校验与 payload 同步使用默认部分时段。
+
+- **多班 Hero 优先已打卡班次**：同日多班时，若前一班已上班未下班，顶部蓝色大卡优先展示该班 **「已打卡」**，不再被下一班「即将开始/可上班打卡」抢占；**`pickHeroShiftIndex`** 优先级：可下班 → 已上班未下班 → 可上班 → 即将开始 → 已完成置后。
+
+- **打完下班卡自动切下一班**：打卡成功后 **`applyClockPunchResult`** 乐观合并下班记录；**`consolidateShiftPunchRecords`** 合并被拆开的上下班记录；刷新时保留已有打卡不覆盖；**`getShiftPunch`** 合并多条匹配记录；已完成班次 Hero 得分置后。
+
+- **已打卡状态展示**：上班打卡后蓝色 Hero 卡片与今日班次胶囊改为显示 **「已打卡」**（含打卡时间），不再仍显示「上班打卡 / 立即打卡」；已打满卡显示「已完成」；**`SchedulePunchHeroCard`**、**`scheduleHeroShift`**、i18n **`punchHeroClockedInAt`**。
+
+- **部分请假 · 已上班未下班可早退**：迟到打卡后不再锁定开始时间；仅上班卡时可选「班次开始～上班打卡」（迟到说明）或「上班时间～班次结束」（计划早退）；**`partialLeaveConstraints.ts`** 新增 **`clocked_in_only`** 场景，校验时传入打卡记录；**`request-create`** 提示文案 **`leavePartialClockedInHint`**。
+
 ## 2026-06-10
 
 - **App 版本更新**：

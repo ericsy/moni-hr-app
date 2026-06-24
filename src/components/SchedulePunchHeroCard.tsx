@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
 import { colors } from '../theme/colors';
+import { formatPunchHm } from '../utils/formatPunchTime';
 import { getApproximateServerNowDate } from '../utils/serverClock';
 import {
   formatShiftEndHm,
@@ -12,6 +13,38 @@ import {
   minutesUntilShiftStart,
 } from '../utils/scheduleHeroShift';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
+
+type HeroDisplayMode = 'clock_in' | 'clock_out' | 'clocked_in' | 'completed' | 'idle';
+
+function resolveClockInIso(
+  punch: ShiftPunchRecord | undefined,
+  pairPunch: ShiftPunchRecord | undefined,
+  overnightRole: MyPublishedShiftSlot['overnightRole'],
+): string | undefined {
+  if (overnightRole === 'end') return pairPunch?.clockInAt ?? punch?.clockInAt;
+  return punch?.clockInAt;
+}
+
+function resolveHeroDisplayMode(
+  actions: ReturnType<typeof getShiftCardActions>,
+  clockInIso: string | undefined,
+  clockOutIso: string | undefined,
+): HeroDisplayMode {
+  if (actions.showClockOut) return 'clock_out';
+  if (actions.showClockIn) return 'clock_in';
+  if (actions.statusKey === 'shiftStatusCompleted' || (clockInIso && clockOutIso)) {
+    return 'completed';
+  }
+  if (
+    clockInIso &&
+    (actions.statusKey === 'shiftStatusClockedInWaitEnd' ||
+      actions.statusKey === 'shiftStatusClockedIn' ||
+      actions.statusKey === 'shiftStatusPastIncomplete')
+  ) {
+    return 'clocked_in';
+  }
+  return 'idle';
+}
 
 type Props = {
   slot: MyPublishedShiftSlot;
@@ -34,7 +67,7 @@ export function SchedulePunchHeroCard({
   punchBusy,
   onPunch,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const now = getApproximateServerNowDate();
   const actions = getShiftCardActions(
     workDateIso,
@@ -48,10 +81,26 @@ export function SchedulePunchHeroCard({
   );
 
   const canPunch = actions.showClockIn || actions.showClockOut;
-  const isClockOut = actions.showClockOut;
-  const title = isClockOut ? t('punchHeroClockOut') : t('punchHeroClockIn');
+  const overnightRole = slot.overnightRole ?? 'normal';
+  const clockInIso = resolveClockInIso(punch, pairPunch, overnightRole);
+  const clockOutIso = punch?.clockOutAt;
+  const heroMode = resolveHeroDisplayMode(actions, clockInIso, clockOutIso);
+
+  const isClockOut = heroMode === 'clock_out';
+  const title =
+    heroMode === 'completed'
+      ? t('shiftBadgeCompleted')
+      : heroMode === 'clocked_in'
+        ? t('shiftBadgeClockedIn')
+        : isClockOut
+          ? t('punchHeroClockOut')
+          : t('punchHeroClockIn');
   const timeLabel = isClockOut ? formatShiftEndHm(slot.range) : formatShiftStartHm(slot.range);
-  const minutesLeft = !isClockOut ? minutesUntilShiftStart(slot.range, now) : null;
+  const minutesLeft = heroMode === 'clock_in' ? minutesUntilShiftStart(slot.range, now) : null;
+  const clockInLabel =
+    heroMode === 'clocked_in' && clockInIso
+      ? t('punchHeroClockedInAt', { time: formatPunchHm(clockInIso, i18n.language) })
+      : null;
 
   return (
     <View style={styles.card}>
@@ -60,34 +109,55 @@ export function SchedulePunchHeroCard({
           <Ionicons color="#fff" name="time-outline" size={28} />
         </View>
         <Text style={styles.title}>{title}</Text>
-        <Text style={styles.subtitle}>
-          {isClockOut ? t('punchHeroEndTime', { time: timeLabel }) : t('punchHeroStartTime', { time: timeLabel })}
-        </Text>
+        {heroMode === 'clocked_in' && clockInLabel ? (
+          <Text style={styles.subtitle}>{clockInLabel}</Text>
+        ) : heroMode === 'completed' ? (
+          <Text style={styles.subtitle}>
+            {clockInIso && clockOutIso
+              ? `${formatPunchHm(clockInIso, i18n.language)} – ${formatPunchHm(clockOutIso, i18n.language)}`
+              : t('punchHeroStartTime', { time: timeLabel })}
+          </Text>
+        ) : (
+          <Text style={styles.subtitle}>
+            {isClockOut ? t('punchHeroEndTime', { time: timeLabel }) : t('punchHeroStartTime', { time: timeLabel })}
+          </Text>
+        )}
         {minutesLeft != null ? (
           <View style={styles.countdownPill}>
             <Text style={styles.countdownText}>{t('minutesUntilShift', { count: minutesLeft })}</Text>
           </View>
         ) : null}
       </View>
-      <Pressable
-        accessibilityLabel={canPunch ? title : t('punchHeroUnavailable')}
-        disabled={!canPunch || punchBusy}
-        onPress={() => void onPunch()}
-        style={({ pressed }) => [
-          styles.punchBtn,
-          (!canPunch || punchBusy) && styles.punchBtnDisabled,
-          pressed && canPunch && !punchBusy && styles.punchBtnPressed,
-        ]}
-      >
-        <View style={styles.punchCircle}>
-          {punchBusy ? (
-            <ActivityIndicator color={colors.text} size="small" />
-          ) : (
-            <Ionicons color={colors.text} name="finger-print" size={32} />
-          )}
+      {heroMode === 'clocked_in' || heroMode === 'completed' ? (
+        <View style={styles.punchBtn}>
+          <View style={[styles.punchCircle, styles.punchCircleDone]}>
+            <Ionicons color={colors.success} name="checkmark-circle" size={36} />
+          </View>
+          <Text style={styles.punchBtnText}>
+            {heroMode === 'completed' ? t('shiftBadgeCompleted') : t('shiftBadgeClockedIn')}
+          </Text>
         </View>
-        <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
-      </Pressable>
+      ) : (
+        <Pressable
+          accessibilityLabel={canPunch ? title : t('punchHeroUnavailable')}
+          disabled={!canPunch || punchBusy}
+          onPress={() => void onPunch()}
+          style={({ pressed }) => [
+            styles.punchBtn,
+            (!canPunch || punchBusy) && styles.punchBtnDisabled,
+            pressed && canPunch && !punchBusy && styles.punchBtnPressed,
+          ]}
+        >
+          <View style={styles.punchCircle}>
+            {punchBusy ? (
+              <ActivityIndicator color={colors.text} size="small" />
+            ) : (
+              <Ionicons color={colors.text} name="finger-print" size={32} />
+            )}
+          </View>
+          <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -142,5 +212,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  punchCircleDone: { backgroundColor: '#fff' },
   punchBtnText: { marginTop: 6, fontSize: 12, fontWeight: '700', color: '#fff', textAlign: 'center' },
 });

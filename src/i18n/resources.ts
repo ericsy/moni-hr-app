@@ -78,6 +78,7 @@ export const resources = {
       punchHeroEndTime: 'Shift ends at {{time}}',
       punchHeroNow: 'Punch now',
       punchHeroUnavailable: 'Punch not available',
+      punchHeroClockedInAt: 'Clocked in at {{time}}',
       minutesUntilShift: '{{count}} min until shift starts',
       shiftBadgeNotStarted: 'Not started',
       shiftBadgeNotPunched: 'Not punched',
@@ -241,7 +242,9 @@ export const resources = {
       leaveTimeInvalid:
         'Leave times must match a valid partial pattern (late arrival or early departure) and cannot cover time you already worked.',
       leavePartialLateArrivalHint:
-        'You clocked in late. Leave can only cover from shift start until your clock-in time.',
+        'Clocked in late. Leave can only cover from shift start until your clock-in time.',
+      leavePartialClockedInHint:
+        'Clocked in: choose shift start to clock-in (late arrival), or clock-in to shift end (early departure).',
       leavePartialEarlyDepartureHint:
         'You clocked out early. Leave can only cover from your clock-out time until shift end.',
       leaveTimePickShiftHint: 'Select shifts below. Each shift can be full or partial leave.',
@@ -405,10 +408,11 @@ export const resources = {
       punchHeroEndTime: '下班时间 {{time}}',
       punchHeroNow: '立即打卡',
       punchHeroUnavailable: '当前不可打卡',
+      punchHeroClockedInAt: '上班于 {{time}}',
       minutesUntilShift: '距离上班 {{count}} 分钟',
       shiftBadgeNotStarted: '未开始',
       shiftBadgeNotPunched: '未打卡',
-      shiftBadgeClockedIn: '已上班',
+      shiftBadgeClockedIn: '已打卡',
       shiftBadgeCompleted: '已完成',
       shiftBadgeLeavePending: '请假待审',
       shiftBadgeLeaveApproved: '已请假',
@@ -561,6 +565,8 @@ export const resources = {
       leaveTimeSpan: '请假 {{from}} – {{to}}',
       leaveTimeInvalid: '请假时段须符合晚来或早走规则，且不能包含已打卡在岗的时间。',
       leavePartialLateArrivalHint: '已迟到打卡，部分请假仅可填班次开始至上班时间之间。',
+      leavePartialClockedInHint:
+        '已上班打卡：可选「班次开始～上班时间」说明迟到，或「上班时间～班次结束」申请早退。',
       leavePartialEarlyDepartureHint: '已早退打卡，部分请假仅可填下班时间至班次结束之间。',
       leaveTimePickShiftHint: '请选择下方班次；每个班次可单独设置整段或部分时段请假。',
       leaveShiftPunchLabel: '打卡',

@@ -24,7 +24,7 @@ import {
 } from '../api/mapAttendanceRequest';
 import { enrichShiftBindingsFromSchedule } from '../utils/requestShiftBinding';
 import { fetchClockPunchesByDay, postClockPunch } from '../api/clock';
-import { mapPunchesByPublishedCell } from '../api/mapClockPunches';
+import { applyClockPunchResult, consolidateShiftPunchRecords, mapPunchesByPublishedCell } from '../api/mapClockPunches';
 import {
   activateEmployeeAccount,
   changeEmployeePassword,
@@ -646,7 +646,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       slot: { id: string; range: string; areaName: string; shiftName: string },
     ) => {
       const target = shiftMatchTargetFromSlot(workDate, slot);
-      return shiftPunches.find((p) => punchRecordMatchesTarget(p, target));
+      const matches = shiftPunches.filter((p) => punchRecordMatchesTarget(p, target));
+      if (matches.length === 0) return undefined;
+      if (matches.length === 1) return matches[0];
+      return matches.reduce(
+        (merged, r) => ({
+          ...merged,
+          scheduleId: merged.scheduleId || r.scheduleId,
+          shiftKey: merged.shiftKey || r.shiftKey,
+          scheduledRange: merged.scheduledRange || r.scheduledRange,
+          clockInAt: merged.clockInAt || r.clockInAt,
+          clockOutAt: merged.clockOutAt || r.clockOutAt,
+        }),
+        matches[0],
+      );
     },
     [shiftPunches],
   );
@@ -654,7 +667,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const mergeShiftPunchesForDate = useCallback((workDate: string, records: ShiftPunchRecord[]) => {
     setShiftPunches((prev) => {
       const rest = prev.filter((p) => p.workDate !== workDate);
-      return [...rest, ...records];
+      const kept = prev.filter((p) => p.workDate === workDate);
+      return [...rest, ...consolidateShiftPunchRecords([...kept, ...records])];
     });
   }, []);
 
@@ -724,6 +738,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const at = data.punchedAt || new Date().toISOString();
         syncServerTimeFromMillis(new Date(at).getTime());
+        setShiftPunches((prev) =>
+          consolidateShiftPunchRecords(applyClockPunchResult(prev, data, workDate)),
+        );
         await refreshShiftPunchesForDate(workDate);
         setClockEvents((prev) => [...prev, { id: `${scheduleId}-${kind}-${at}`, type: kind, at }]);
 
