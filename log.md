@@ -1,5 +1,14 @@
 # moni-hr-app 变更日志
 
+## 2026-06-24
+
+- **新增 Today 外勤页（员工 App）**：新增 `app/(main)/(tabs)/today.tsx`，对接 `GET /api/v1/app/today-work-summary` 与 `POST /api/v1/app/work/punch`，支持下拉刷新、前台回到页面自动刷新、定位授权后打卡（`expo-location` + `getPunchDeviceId`），并在打卡成功后用接口返回摘要刷新页面状态。
+- **新增外勤 Today 数据层**：新增 `src/types/fieldService.ts`、`src/api/todayWork.ts`、`src/api/mapTodayWorkSummary.ts`，统一 `TodayWorkSummary` / `timeline` / `currentPunchAction` 类型与响应映射，`apiRequest` 携带 `storeId`。
+- **新增 Today UI 组件**：新增 `src/components/today/TodayPunchActionButton.tsx`（单主按钮 + WAITING/DONE 提示态）与 `src/components/today/TodayWorkTimeline.tsx`（门店班次块 + 嵌套外勤工单时间线）。
+- **导航与默认入口调整**：`app/(main)/(tabs)/_layout.tsx` 增加 Today 首个 Tab（日历图标），`app/index.tsx` 默认重定向到 `/today`。
+- **i18n 补充**：`src/i18n/resources.ts` 新增中英文 Today 页签、打卡动作、时间线与加载错误文案。
+- **设备标识工具补充**：`src/utils/punchDevice.ts` 新增 `getPunchDeviceId()`，并复用到原 `getPunchDevicePayload()`。
+
 ## 2026-05-29
 
 - **迟到打满卡仍可部分请假**：… **`toFixed`** = 上班打卡时刻；修复 **`early_out`** 校验误拦（有下班卡时开始<下班仍合法）；提交校验与 payload 同步使用默认部分时段。
