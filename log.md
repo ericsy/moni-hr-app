@@ -1,5 +1,9 @@
 # moni-hr-app 变更日志
 
+## 2026-06-11
+
+- **全环境 API 改 HTTPS**：**`config/apiEnv.js`** 中 dev / test / pro 接口基址由 `http://` 改为 `https://`（`dev-api`、`test-api`、`api.monihr.com`）。
+
 ## 2026-05-29
 
 - **迟到打满卡仍可部分请假**：… **`toFixed`** = 上班打卡时刻；修复 **`early_out`** 校验误拦（有下班卡时开始<下班仍合法）；提交校验与 payload 同步使用默认部分时段。
