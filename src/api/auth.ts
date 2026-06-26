@@ -59,8 +59,10 @@ export function logoutSession() {
   });
 }
 
-export function fetchCurrentEmployee() {
-  return apiRequest<AppEmployeeUser>('/api/v1/app/auth/me');
+export function fetchCurrentEmployee(storeId?: string | number) {
+  return apiRequest<AppEmployeeUser>('/api/v1/app/auth/me', {
+    storeId,
+  });
 }
 
 /** 更新 App 最近选用门店（PUT /api/v1/app/auth/last-store） */

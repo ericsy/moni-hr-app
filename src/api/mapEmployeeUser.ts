@@ -9,6 +9,11 @@ type RawAppEmployee = AppEmployeeUser & {
   deputy_manager_stores?: StoreBrief[];
 };
 
+type RawStoreBrief = StoreBrief & {
+  merchant_id?: number;
+  merchant_name?: string;
+};
+
 function normalizeAppEmployee(emp: AppEmployeeUser): AppEmployeeUser {
   const r = emp as RawAppEmployee;
   return {
@@ -18,18 +23,34 @@ function normalizeAppEmployee(emp: AppEmployeeUser): AppEmployeeUser {
   };
 }
 
+function mapStoreBrief(s: StoreBrief): {
+  id: string;
+  name: string;
+  merchantId?: string;
+  merchantName?: string;
+  hasStoreManager?: boolean;
+} {
+  const raw = s as RawStoreBrief;
+  const merchantId = raw.merchantId ?? raw.merchant_id;
+  const merchantName = raw.merchantName ?? raw.merchant_name;
+  const hasStoreManager = raw.hasStoreManager ?? raw.has_store_manager;
+  const label =
+    merchantName && merchantName.trim()
+      ? `${merchantName.trim()} / ${s.name}`
+      : s.name;
+  return {
+    id: String(s.id),
+    name: label,
+    ...(merchantId != null ? { merchantId: String(merchantId) } : {}),
+    ...(merchantName ? { merchantName } : {}),
+    ...(hasStoreManager != null ? { hasStoreManager } : {}),
+  };
+}
+
 export function mapEmployeeToUser(emp: AppEmployeeUser): User {
   const e = normalizeAppEmployee(emp);
 
-  const fromDetails = (e.storeDetails ?? []).map((s) => {
-    const raw = s as StoreBrief & { has_store_manager?: boolean };
-    const hasStoreManager = raw.hasStoreManager ?? raw.has_store_manager;
-    return {
-      id: String(s.id),
-      name: s.name,
-      ...(hasStoreManager != null ? { hasStoreManager } : {}),
-    };
-  });
+  const fromDetails = (e.storeDetails ?? []).map((s) => mapStoreBrief(s));
   const fromIds =
     e.storeIds?.map((id) => ({
       id: String(id),

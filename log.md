@@ -1,5 +1,13 @@
 # moni-hr-app 变更日志
 
+## 2026-06-24
+
+- **跨商户兼职（方案 A）**：登录流程不变，后端返回聚合 **`storeDetails`**（含 **`merchantId`/`merchantName`**）；门店切换沿用 **`selectedStoreId`**，请求自动带 **`X-Store-Id`**。
+  - **`src/api/types.ts`**：**`StoreBrief`** 增加商户字段。
+  - **`src/api/auth.ts`**：**`fetchCurrentEmployee(storeId?)`** 刷新/me 时传入当前门店。
+  - **`src/api/mapEmployeeUser.ts`**：门店名显示 **`商户名 / 门店名`**。
+  - **`src/context/AuthContext.tsx`**：切店、刷新员工信息时传递 **`selectedStoreId`**。
+
 ## 2026-06-11
 
 - **全环境 API 改 HTTPS**：**`config/apiEnv.js`** 中 dev / test / pro 接口基址由 `http://` 改为 `https://`（`dev-api`、`test-api`、`api.monihr.com`）。
