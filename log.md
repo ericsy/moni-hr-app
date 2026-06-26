@@ -1,5 +1,14 @@
 # moni-hr-app 变更日志
 
+## 2026-06-26
+
+- **登录后业务接口 401（未带 Authorization）修复**：
+  - 服务端诊断确认旧包 1.0.0 登录后 GET 请求 **`hasAuth: false`**，后端与 curl 带 Token 均正常，问题在客户端。
+  - **`AuthContext`**：冷启动若仅有 **`session` 无 `token`** 则清除无效会话（原逻辑会进主页但所有请求不带 Bearer）。
+  - **`authEpochRef`**：登录/激活时递增，避免冷启动恢复与登录竞态覆盖 token。
+  - **`pickAccessToken`**：统一解析 `accessToken` / `access_token` / `token`；登录/激活无 token 时提示无效响应。
+  - **`persistAuth`**：先同步写入 **`accessTokenRef`** 再 `setState`。
+
 ## 2026-06-24
 
 - **跨商户切店登录失效修复**：**`setSelectedStore`** 改为先 **`updateLastStore` + `/me`** 成功后再更新本地 **`selectedStoreId`**，避免切店瞬间并发请求带新门店 id 触发 401 全局登出；**`updateLastStore`** 补充 **`X-Store-Id`** 请求头。
