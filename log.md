@@ -2,6 +2,7 @@
 
 ## 2026-06-24
 
+- **跨商户切店登录失效修复**：**`setSelectedStore`** 改为先 **`updateLastStore` + `/me`** 成功后再更新本地 **`selectedStoreId`**，避免切店瞬间并发请求带新门店 id 触发 401 全局登出；**`updateLastStore`** 补充 **`X-Store-Id`** 请求头。
 - **跨商户兼职（方案 A）**：登录流程不变，后端返回聚合 **`storeDetails`**（含 **`merchantId`/`merchantName`**）；门店切换沿用 **`selectedStoreId`**，请求自动带 **`X-Store-Id`**。
   - **`src/api/types.ts`**：**`StoreBrief`** 增加商户字段。
   - **`src/api/auth.ts`**：**`fetchCurrentEmployee(storeId?)`** 刷新/me 时传入当前门店。

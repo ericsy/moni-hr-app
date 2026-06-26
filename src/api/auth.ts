@@ -70,6 +70,7 @@ export function updateLastStore(storeId: number) {
   return apiRequest<null>('/api/v1/app/auth/last-store', {
     method: 'PUT',
     body: { storeId },
+    storeId,
   });
 }
 

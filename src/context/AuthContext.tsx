@@ -624,15 +624,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const prev = session;
       if (!prev) return;
       if (!prev.user.stores.some((s) => s.id === storeId)) return;
-
-      const next: Session = { user: { ...prev.user, selectedStoreId: storeId } };
-      setSession(next);
-      setShiftPunches([]);
-      setShiftPunchDatesLoaded({});
-      setMyAttendanceRequests([]);
-      setApprovalAttendanceRequests([]);
-      setSelectedStoreHasStoreManager(null);
-      await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+      if (prev.user.selectedStoreId === storeId) return;
 
       const numericId = Number(storeId);
       if (!Number.isFinite(numericId) || !accessTokenRef.current) return;
@@ -641,11 +633,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await updateLastStore(numericId);
         const emp = await fetchCurrentEmployee(storeId);
         const user = mapEmployeeToUser(emp);
-        const synced: Session = { user: { ...user, selectedStoreId: storeId } };
-        setSession(synced);
-        await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(synced));
+        const next: Session = { user: { ...user, selectedStoreId: storeId } };
+        setSession(next);
+        setShiftPunches([]);
+        setShiftPunchDatesLoaded({});
+        setMyAttendanceRequests([]);
+        setApprovalAttendanceRequests([]);
+        setSelectedStoreHasStoreManager(null);
+        await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
       } catch {
-        // 保留本地已选门店
+        // 切店失败时保留原门店，避免 401 竞态导致误登出
       }
     },
     [session],
