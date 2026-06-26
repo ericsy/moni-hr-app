@@ -64,6 +64,8 @@ const LANG_KEY = 'moni-hr-lang-v1';
 export type StoreRef = {
   id: string;
   name: string;
+  merchantId?: string;
+  merchantName?: string;
   /** 该门店是否已配置店长；来自 storeDetails / 考勤列表接口 */
   hasStoreManager?: boolean;
 };
@@ -343,10 +345,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const refreshSessionFromApi = useCallback(async (token: string) => {
+  const refreshSessionFromApi = useCallback(async (token: string, storeId?: string) => {
     accessTokenRef.current = token;
     setAccessToken(token);
-    const emp = await fetchCurrentEmployee();
+    const emp = await fetchCurrentEmployee(storeId);
     const user = mapEmployeeToUser(emp);
     const next: Session = { user };
     setSession(next);
@@ -374,7 +376,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         if (rawToken) {
           try {
-            await refreshSessionFromApi(rawToken);
+            let bootStoreId: string | undefined;
+            if (rawSession) {
+              try {
+                const parsed = JSON.parse(rawSession) as Session;
+                bootStoreId = parsed.user?.selectedStoreId;
+              } catch {
+                bootStoreId = undefined;
+              }
+            }
+            await refreshSessionFromApi(rawToken, bootStoreId);
           } catch (e) {
             if (e instanceof ApiError && e.code === 401) {
               showSessionExpiredAlert(() => {
@@ -593,7 +604,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const prevSelected = session?.user.selectedStoreId;
       accessTokenRef.current = token;
-      const emp = await fetchCurrentEmployee();
+      const emp = await fetchCurrentEmployee(prevSelected);
       let user = mapEmployeeToUser(emp);
       if (prevSelected && user.stores.some((s) => s.id === prevSelected)) {
         user = { ...user, selectedStoreId: prevSelected };
@@ -628,7 +639,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         await updateLastStore(numericId);
-        const emp = await fetchCurrentEmployee();
+        const emp = await fetchCurrentEmployee(storeId);
         const user = mapEmployeeToUser(emp);
         const synced: Session = { user: { ...user, selectedStoreId: storeId } };
         setSession(synced);

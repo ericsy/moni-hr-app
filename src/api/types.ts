@@ -9,6 +9,9 @@ export type ApiResult<T> = {
 export type StoreBrief = {
   id: number;
   name: string;
+  /** 跨商户：门店所属商户 */
+  merchantId?: number;
+  merchantName?: string;
   /** 该门店是否已配置店长（merchant_store_office.store_manager） */
   hasStoreManager?: boolean;
   has_store_manager?: boolean;

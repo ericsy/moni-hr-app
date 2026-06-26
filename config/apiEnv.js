@@ -1,8 +1,8 @@
 /** @type {'dev' | 'test' | 'pro'} */
 const API_URL_BY_ENV = {
-  dev: 'http://dev-api.monihr.com',
-  test: 'http://test-api.monihr.com',
-  pro: 'http://api.monihr.com',
+  dev: 'https://dev-api.monihr.com',
+  test: 'https://test-api.monihr.com',
+  pro: 'https://api.monihr.com',
 };
 
 /** @param {string | undefined} raw */
