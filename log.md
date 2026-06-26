@@ -20,6 +20,8 @@
 
 ## 2026-06-11
 
+- **App 图标生成**：由 **`moni-hr-logo-icon.png`** 生成 **1024×1024**（**`icon.png`** 等）。去除四周边缘与底部蓝灰投影（加强中性灰识别、底部按实色 Logo 裁切、缩放后再漂白）；脚本 **`scripts/generate-app-icon.py`**。
+
 - **全环境 API 改 HTTPS**：**`config/apiEnv.js`** 中 dev / test / pro 接口基址由 `http://` 改为 `https://`（`dev-api`、`test-api`、`api.monihr.com`）。
 
 ## 2026-05-29
