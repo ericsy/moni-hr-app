@@ -1,5 +1,14 @@
 # moni-hr-app 变更日志
 
+## 2026-06-26
+
+- **登录后业务接口 401（未带 Authorization）修复**：
+  - 服务端诊断确认旧包 1.0.0 登录后 GET 请求 **`hasAuth: false`**，后端与 curl 带 Token 均正常，问题在客户端。
+  - **`AuthContext`**：冷启动若仅有 **`session` 无 `token`** 则清除无效会话（原逻辑会进主页但所有请求不带 Bearer）。
+  - **`authEpochRef`**：登录/激活时递增，避免冷启动恢复与登录竞态覆盖 token。
+  - **`pickAccessToken`**：统一解析 `accessToken` / `access_token` / `token`；登录/激活无 token 时提示无效响应。
+  - **`persistAuth`**：先同步写入 **`accessTokenRef`** 再 `setState`。
+
 ## 2026-06-24
 
 - **新增 Today 外勤页（员工 App）**：新增 `app/(main)/(tabs)/today.tsx`，对接 `GET /api/v1/app/today-work-summary` 与 `POST /api/v1/app/work/punch`，支持下拉刷新、前台回到页面自动刷新、定位授权后打卡（`expo-location` + `getPunchDeviceId`），并在打卡成功后用接口返回摘要刷新页面状态。
@@ -11,6 +20,7 @@
 
 ## 2026-06-24
 
+- **跨商户切店登录失效修复**：**`setSelectedStore`** 改为先 **`updateLastStore` + `/me`** 成功后再更新本地 **`selectedStoreId`**，避免切店瞬间并发请求带新门店 id 触发 401 全局登出；**`updateLastStore`** 补充 **`X-Store-Id`** 请求头。
 - **跨商户兼职（方案 A）**：登录流程不变，后端返回聚合 **`storeDetails`**（含 **`merchantId`/`merchantName`**）；门店切换沿用 **`selectedStoreId`**，请求自动带 **`X-Store-Id`**。
   - **`src/api/types.ts`**：**`StoreBrief`** 增加商户字段。
   - **`src/api/auth.ts`**：**`fetchCurrentEmployee(storeId?)`** 刷新/me 时传入当前门店。
@@ -18,6 +28,8 @@
   - **`src/context/AuthContext.tsx`**：切店、刷新员工信息时传递 **`selectedStoreId`**。
 
 ## 2026-06-11
+
+- **App 图标生成**：由 **`moni-hr-logo-icon.png`** 生成 **1024×1024**（**`icon.png`** 等）。去除四周边缘与底部蓝灰投影（加强中性灰识别、底部按实色 Logo 裁切、缩放后再漂白）；脚本 **`scripts/generate-app-icon.py`**。
 
 - **全环境 API 改 HTTPS**：**`config/apiEnv.js`** 中 dev / test / pro 接口基址由 `http://` 改为 `https://`（`dev-api`、`test-api`、`api.monihr.com`）。
 

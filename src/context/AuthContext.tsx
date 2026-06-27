@@ -46,6 +46,7 @@ import {
 import { mapEmployeeToUser } from '../api/mapEmployeeUser';
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../api/types';
+import { pickAccessToken } from '../api/types';
 import i18n, { setAppLanguage } from '../i18n';
 import {
   resetSessionExpiredAlert,
@@ -273,6 +274,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const accessTokenRef = useRef<string | null>(null);
   const languageRef = useRef<'en' | 'zh'>('en');
+  /** 递增后可使进行中的冷启动恢复逻辑失效，避免与登录竞态覆盖 token */
+  const authEpochRef = useRef(0);
 
   useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -332,13 +335,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const persistAuth = useCallback(async (nextSession: Session | null, token: string | null) => {
+    const normalizedToken = token?.trim() ? token.trim() : null;
+    accessTokenRef.current = normalizedToken;
+    setAccessToken(normalizedToken);
     setSession(nextSession);
-    setAccessToken(token);
-    accessTokenRef.current = token;
-    if (nextSession && token) {
+    if (nextSession && normalizedToken) {
       await Promise.all([
         AsyncStorage.setItem(AUTH_KEY, JSON.stringify(nextSession)),
-        AsyncStorage.setItem(TOKEN_KEY, token),
+        AsyncStorage.setItem(TOKEN_KEY, normalizedToken),
       ]);
     } else {
       await Promise.all([AsyncStorage.removeItem(AUTH_KEY), AsyncStorage.removeItem(TOKEN_KEY)]);
@@ -360,7 +364,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const epoch = ++authEpochRef.current;
     let cancelled = false;
+    const stale = () => cancelled || epoch !== authEpochRef.current;
     void (async () => {
       try {
         const [rawSession, rawToken, rawLang] = await Promise.all([
@@ -368,7 +374,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(TOKEN_KEY),
           AsyncStorage.getItem(LANG_KEY),
         ]);
-        if (cancelled) return;
+        if (stale()) return;
         if (rawLang === 'en' || rawLang === 'zh') {
           setLanguageState(rawLang);
           setAppLanguage(rawLang);
@@ -387,6 +393,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
             await refreshSessionFromApi(rawToken, bootStoreId);
           } catch (e) {
+            if (stale()) return;
             if (e instanceof ApiError && e.code === 401) {
               showSessionExpiredAlert(() => {
                 resetUnauthorizedGuard();
@@ -402,14 +409,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           }
         } else if (rawSession) {
-          const parsed = JSON.parse(rawSession) as Session;
-          const u = migrateUser(parsed.user as User & { storeName?: string });
-          setSession({ user: u });
+          // 仅有 session、无 token 会导致业务请求不带 Authorization
+          await persistAuth(null, null);
         }
       } catch {
         // ignore corrupt storage
       } finally {
-        if (!cancelled) setReady(true);
+        if (!stale()) setReady(true);
       }
     })();
     return () => {
@@ -424,11 +430,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: 'empty' };
       }
       try {
+        authEpochRef.current += 1;
         const result = await loginWithEmail(email, password);
+        const token = pickAccessToken(result);
+        if (!token) {
+          return { ok: false, error: 'api', message: i18n.t('loginErrorInvalidResponse') };
+        }
         const user = mapEmployeeToUser(result.user);
         resetUnauthorizedGuard();
         resetSessionExpiredAlert();
-        await persistAuth({ user }, result.accessToken);
+        await persistAuth({ user }, token);
         return { ok: true };
       } catch (e) {
         const message =
@@ -501,15 +512,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: 'invalid_password' };
       }
       try {
+        authEpochRef.current += 1;
         const result = await activateEmployeeAccount({
           email: trimmedEmail,
           code: trimmedCode,
           password,
         });
+        const token = pickAccessToken(result);
+        if (!token) {
+          return { ok: false, error: 'api', message: i18n.t('loginErrorInvalidResponse') };
+        }
         const user = mapEmployeeToUser(result.user);
         resetUnauthorizedGuard();
         resetSessionExpiredAlert();
-        await persistAuth({ user }, result.accessToken);
+        await persistAuth({ user }, token);
         return { ok: true };
       } catch (e) {
         const message = e instanceof ApiError ? e.message : undefined;
@@ -624,15 +640,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const prev = session;
       if (!prev) return;
       if (!prev.user.stores.some((s) => s.id === storeId)) return;
-
-      const next: Session = { user: { ...prev.user, selectedStoreId: storeId } };
-      setSession(next);
-      setShiftPunches([]);
-      setShiftPunchDatesLoaded({});
-      setMyAttendanceRequests([]);
-      setApprovalAttendanceRequests([]);
-      setSelectedStoreHasStoreManager(null);
-      await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
+      if (prev.user.selectedStoreId === storeId) return;
 
       const numericId = Number(storeId);
       if (!Number.isFinite(numericId) || !accessTokenRef.current) return;
@@ -641,11 +649,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await updateLastStore(numericId);
         const emp = await fetchCurrentEmployee(storeId);
         const user = mapEmployeeToUser(emp);
-        const synced: Session = { user: { ...user, selectedStoreId: storeId } };
-        setSession(synced);
-        await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(synced));
+        const next: Session = { user: { ...user, selectedStoreId: storeId } };
+        setSession(next);
+        setShiftPunches([]);
+        setShiftPunchDatesLoaded({});
+        setMyAttendanceRequests([]);
+        setApprovalAttendanceRequests([]);
+        setSelectedStoreHasStoreManager(null);
+        await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(next));
       } catch {
-        // 保留本地已选门店
+        // 切店失败时保留原门店，避免 401 竞态导致误登出
       }
     },
     [session],

@@ -56,6 +56,19 @@ export type AppLoginResult = {
   user: AppEmployeeUser;
 };
 
+/** 兼容 camelCase / snake_case / 历史字段名 */
+export function pickAccessToken(
+  result: AppLoginResult | (AppLoginResult & Record<string, unknown>),
+): string | null {
+  const r = result as Record<string, unknown>;
+  const raw = r.accessToken ?? r.access_token ?? r.token;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export type AppActivationSendCodeRequest = {
   email: string;
 };
