@@ -23,6 +23,7 @@ import {
 } from '../../../src/api/mapPublishedSchedule';
 import { fetchMyPublishedSchedule } from '../../../src/api/schedule';
 import { SchedulePunchHeroCard } from '../../../src/components/SchedulePunchHeroCard';
+import { BrandLogo } from '../../../src/components/BrandLogo';
 import { TodayShiftRow } from '../../../src/components/TodayShiftRow';
 import { getActiveStore, useAuth } from '../../../src/context/AuthContext';
 import { useRefreshOnAppForeground } from '../../../src/hooks/useRefreshOnAppForeground';
@@ -260,11 +261,8 @@ export default function ScheduleScreen() {
         <View style={styles.headerBlock}>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{t('tabSchedule')}</Text>
-            <View style={styles.headerArt} pointerEvents="none">
-              <Ionicons color={colors.primarySoft} name="calendar" size={56} />
-              <View style={styles.headerArtClock}>
-                <Ionicons color={colors.primary} name="time" size={22} />
-              </View>
+            <View pointerEvents="none">
+              <BrandLogo size={56} style={styles.headerArt} />
             </View>
           </View>
           <View style={styles.headerQuickLinks}>
@@ -507,20 +505,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   title: { fontSize: 26, fontWeight: '800', color: colors.text, flex: 1 },
-  headerArt: { width: 64, height: 56, alignItems: 'center', justifyContent: 'center' },
-  headerArtClock: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.primarySoft,
-  },
+  headerArt: { marginBottom: 2 },
   headerQuickLinks: {
     flexDirection: 'row',
     flexWrap: 'wrap',

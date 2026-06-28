@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
+import { BrandLogo } from '../../src/components/BrandLogo';
 import { colors } from '../../src/theme/colors';
 
 const DEFAULT_RETRY_SECONDS = 60;
@@ -135,9 +136,7 @@ export default function ActivateScreen() {
           <View style={styles.page}>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <View style={styles.logoCircle}>
-                  <Ionicons color={colors.primaryDark} name="mail-outline" size={30} />
-                </View>
+                <BrandLogo size={56} style={styles.brandLogo} />
                 <Text style={styles.brand}>{t('brand')}</Text>
                 <Text style={styles.cardSubtitle}>{t('activateTitle')}</Text>
                 <Text style={styles.cardHint}>{t('activateSubtitle')}</Text>
@@ -280,13 +279,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardHeader: { alignItems: 'center', marginBottom: 4 },
-  logoCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  brandLogo: {
     marginBottom: 10,
   },
   brand: { fontSize: 22, fontWeight: '800', color: colors.text },
