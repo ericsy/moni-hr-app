@@ -1,5 +1,18 @@
 # moni-hr-app 变更日志
 
+## 2026-06-29
+
+- **版本号升级**：`app.json` **`version`** `1.0.0` → **`1.0.1`**（Android 图标修复发版；`versionCode` 仍由 EAS `production` **`autoIncrement`** 自动递增）。
+
+- **应用内 Logo 统一**：
+  - 新增 **`src/components/BrandLogo.tsx`**，使用 **`assets/icon.png`**（与 App 图标一致）。
+  - 登录 / 激活 / 忘记密码页、排班首页标题区，由 Ionicons 占位图替换为 **`BrandLogo`**。
+
+- **Android 自适应图标裁切修复（第二版）**：
+  - **`scripts/generate-app-icon.py`**：Android 专用 **`render_adaptive_icon()`**，逐像素检测 Logo 到中心距离，自动最大化缩放直至全部实色像素落在安全区（66dp 直径 × 90% 内边距）内；输出 `logo_max_dist` / `safe_radius` 校验，并生成 **`adaptive-icon-safezone-preview.png`**。
+  - 当前 **`adaptive_fill≈0.42`**，在「绝不裁切 Logo 主体」前提下尽量放大；iOS **`icon.png`** 仍为 **`FILL=0.88`** 不变。
+  - 需重新 EAS Build 并提交 Google Play 后生效。
+
 ## 2026-06-26
 
 - **登录后业务接口 401（未带 Authorization）修复**：

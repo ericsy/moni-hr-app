@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
+import { BrandLogo } from '../../src/components/BrandLogo';
 import { useScrollInputAboveKeyboard } from '../../src/hooks/useScrollInputAboveKeyboard';
 import { colors } from '../../src/theme/colors';
 
@@ -159,9 +160,7 @@ export default function ForgotPasswordScreen() {
           <View ref={contentRef} collapsable={false}>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <View style={styles.logoCircle}>
-                  <Ionicons color={colors.primaryDark} name="key-outline" size={30} />
-                </View>
+                <BrandLogo size={56} style={styles.brandLogo} />
                 <Text style={styles.brand}>{t('brand')}</Text>
                 <Text style={styles.cardSubtitle}>{t('forgotTitle')}</Text>
                 <Text style={styles.cardHint}>{t('forgotSubtitle')}</Text>
@@ -315,13 +314,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardHeader: { alignItems: 'center', marginBottom: 4 },
-  logoCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  brandLogo: {
     marginBottom: 10,
   },
   brand: { fontSize: 22, fontWeight: '800', color: colors.text },

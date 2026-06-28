@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
+import { BrandLogo } from '../../src/components/BrandLogo';
 import { useScrollInputAboveKeyboard } from '../../src/hooks/useScrollInputAboveKeyboard';
 import { colors } from '../../src/theme/colors';
 import { clearRememberLogin, loadRememberLogin, saveRememberLogin } from '../../src/utils/rememberLogin';
@@ -125,9 +126,7 @@ export default function LoginScreen() {
           <View ref={contentRef} collapsable={false} style={styles.page}>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <View style={styles.logoCircle}>
-                  <Ionicons color={colors.primaryDark} name="calendar-outline" size={30} />
-                </View>
+                <BrandLogo size={64} style={styles.brandLogo} />
                 <Text style={styles.brand}>{t('brand')}</Text>
                 <Text style={styles.cardSubtitle}>{t('loginTitle')}</Text>
               </View>
@@ -284,13 +283,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingBottom: 4,
   },
-  logoCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  brandLogo: {
     marginBottom: 14,
   },
   brand: {
