@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   KeyboardAvoidingView,
@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../../src/context/AuthContext';
 import { BrandLogo } from '../../src/components/BrandLogo';
+import { useScrollInputAboveKeyboard } from '../../src/hooks/useScrollInputAboveKeyboard';
 import { colors } from '../../src/theme/colors';
 
 const DEFAULT_RETRY_SECONDS = 60;
@@ -33,6 +34,18 @@ export default function ActivateScreen() {
   const [busy, setBusy] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [retrySeconds, setRetrySeconds] = useState(0);
+  const emailWrapRef = useRef<View>(null);
+  const codeWrapRef = useRef<View>(null);
+  const passwordWrapRef = useRef<View>(null);
+
+  const {
+    scrollRef,
+    contentRef,
+    scrollYRef,
+    keyboardHeight,
+    onFieldFocus,
+    scrollContentPaddingBottom,
+  } = useScrollInputAboveKeyboard({ topChrome: 44 });
 
   useEffect(() => {
     const raw = params.email;
@@ -138,11 +151,22 @@ export default function ActivateScreen() {
         style={styles.flex}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          ref={scrollRef}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentContainerStyle={[
+            styles.scrollContent,
+            keyboardHeight > 0 && styles.scrollContentKeyboardOpen,
+            { paddingBottom: scrollContentPaddingBottom },
+          ]}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          onScroll={(e) => {
+            scrollYRef.current = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.page}>
+          <View ref={contentRef} collapsable={false} style={styles.page}>
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <BrandLogo size={56} style={styles.brandLogo} />
@@ -153,13 +177,14 @@ export default function ActivateScreen() {
 
               <View style={styles.divider} />
 
-              <View style={styles.field}>
+              <View ref={emailWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('account')}</Text>
                 <TextInput
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
                   onChangeText={setEmail}
+                  onFocus={() => onFieldFocus(emailWrapRef)}
                   placeholder={t('accountHint')}
                   placeholderTextColor={colors.textMuted}
                   style={styles.input}
@@ -186,12 +211,13 @@ export default function ActivateScreen() {
                 </Text>
               </Pressable>
 
-              <View style={styles.field}>
+              <View ref={codeWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('activateCode')}</Text>
                 <TextInput
                   keyboardType="number-pad"
                   maxLength={4}
                   onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 4))}
+                  onFocus={() => onFieldFocus(codeWrapRef)}
                   placeholder={t('activateCodeHint')}
                   placeholderTextColor={colors.textMuted}
                   style={styles.input}
@@ -200,10 +226,11 @@ export default function ActivateScreen() {
                 />
               </View>
 
-              <View style={styles.field}>
+              <View ref={passwordWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('activatePassword')}</Text>
                 <TextInput
                   onChangeText={setPassword}
+                  onFocus={() => onFieldFocus(passwordWrapRef)}
                   placeholder={t('activatePasswordHint')}
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry
@@ -273,8 +300,20 @@ const styles = StyleSheet.create({
   langPillText: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
   langPillTextOn: { color: colors.primaryDark },
   flex: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingBottom: 24 },
-  page: { flex: 1, justifyContent: 'center', paddingVertical: 12 },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingVertical: 28,
+  },
+  scrollContentKeyboardOpen: {
+    justifyContent: 'flex-start',
+    paddingTop: 12,
+  },
+  page: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
   card: {
     backgroundColor: colors.surface,
     borderRadius: 20,

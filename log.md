@@ -2,6 +2,8 @@
 
 ## 2026-06-29
 
+- **激活页 Android 键盘遮挡**：**`app/(auth)/activate.tsx`** 接入 **`useScrollInputAboveKeyboard`**（与登录/忘记密码页一致），聚焦验证码/密码时自动上滚，避免输入框被键盘盖住。
+
 - **App 登录分步流程**：登录页先输入邮箱点「下一步」，调用 **`POST /api/v1/app/auth/lookup`** 预检；不存在提示账号不存在，未激活跳转激活页，已激活再显示密码框。移除登录页「账户激活」入口。
 
 - **版本号升级**：`app.json` **`version`** `1.0.0` → **`1.0.1`**（Android 图标修复发版；`versionCode` 仍由 EAS `production` **`autoIncrement`** 自动递增）。
