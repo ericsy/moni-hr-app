@@ -20,9 +20,12 @@ import { useScrollInputAboveKeyboard } from '../../src/hooks/useScrollInputAbove
 import { colors } from '../../src/theme/colors';
 import { clearRememberLogin, loadRememberLogin, saveRememberLogin } from '../../src/utils/rememberLogin';
 
+type LoginStep = 'email' | 'password';
+
 export default function LoginScreen() {
   const { t } = useTranslation();
-  const { login, language, setLanguage } = useAuth();
+  const { checkAccountStatus, login, language, setLanguage } = useAuth();
+  const [step, setStep] = useState<LoginStep>('email');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +53,7 @@ export default function LoginScreen() {
         setAccount(saved.email);
         setPassword(saved.password);
         setRememberMe(true);
+        setStep('password');
       }
       setCredentialsReady(true);
     })();
@@ -57,6 +61,35 @@ export default function LoginScreen() {
       cancelled = true;
     };
   }, []);
+
+  const onNext = async () => {
+    const email = account.trim();
+    if (!email) {
+      setError(t('loginErrorEmailEmpty'));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const res = await checkAccountStatus(email);
+    setBusy(false);
+    if (!res.ok) {
+      if (res.error === 'empty_email') {
+        setError(t('loginErrorEmailEmpty'));
+      } else {
+        setError(res.message ?? t('loginErrorFailed'));
+      }
+      return;
+    }
+    if (res.status === 'not_found') {
+      setError(t('loginAccountNotFound'));
+      return;
+    }
+    if (res.status === 'needs_activation') {
+      router.push({ pathname: '/activate', params: { email } });
+      return;
+    }
+    setStep('password');
+  };
 
   const onSubmit = async () => {
     setBusy(true);
@@ -77,6 +110,11 @@ export default function LoginScreen() {
       await clearRememberLogin();
     }
     router.replace('/schedule');
+  };
+
+  const onBackToEmail = () => {
+    setStep('email');
+    setError(null);
   };
 
   return (
@@ -129,75 +167,109 @@ export default function LoginScreen() {
                 <BrandLogo size={64} style={styles.brandLogo} />
                 <Text style={styles.brand}>{t('brand')}</Text>
                 <Text style={styles.cardSubtitle}>{t('loginTitle')}</Text>
+                {step === 'password' ? (
+                  <Text style={styles.cardHint}>{t('loginPasswordStepHint')}</Text>
+                ) : null}
               </View>
 
               <View style={styles.divider} />
 
-              <View ref={accountWrapRef} collapsable={false} style={styles.field}>
-                <Text style={styles.label}>{t('account')}</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="email-address"
-                  textContentType="username"
-                  onChangeText={setAccount}
-                  onFocus={() => onFieldFocus(accountWrapRef)}
-                  placeholder={t('accountHint')}
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.input}
-                  value={account}
-                />
-              </View>
+              {step === 'email' ? (
+                <>
+                  <View ref={accountWrapRef} collapsable={false} style={styles.field}>
+                    <Text style={styles.label}>{t('account')}</Text>
+                    <TextInput
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoFocus={credentialsReady}
+                      keyboardType="email-address"
+                      textContentType="username"
+                      onChangeText={setAccount}
+                      onFocus={() => onFieldFocus(accountWrapRef)}
+                      onSubmitEditing={() => void onNext()}
+                      placeholder={t('accountHint')}
+                      placeholderTextColor={colors.textMuted}
+                      returnKeyType="next"
+                      style={styles.input}
+                      value={account}
+                    />
+                  </View>
 
-              <View ref={passwordWrapRef} collapsable={false} style={styles.field}>
-                <Text style={styles.label}>{t('password')}</Text>
-                <TextInput
-                  onChangeText={setPassword}
-                  onFocus={() => onFieldFocus(passwordWrapRef)}
-                  placeholder="••••••••"
-                  placeholderTextColor={colors.textMuted}
-                  secureTextEntry
-                  textContentType="password"
-                  style={styles.input}
-                  value={password}
-                />
-              </View>
+                  {error ? <Text style={styles.error}>{error}</Text> : null}
 
-              <Pressable
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: rememberMe }}
-                disabled={!credentialsReady}
-                onPress={() => setRememberMe((v) => !v)}
-                style={styles.rememberRow}
-              >
-                <Ionicons
-                  color={rememberMe ? colors.primary : colors.textMuted}
-                  name={rememberMe ? 'checkbox' : 'square-outline'}
-                  size={22}
-                />
-                <Text style={styles.rememberText}>{t('rememberMe')}</Text>
-              </Pressable>
+                  <Pressable
+                    disabled={busy}
+                    onPress={() => void onNext()}
+                    style={({ pressed }) => [
+                      styles.primaryBtn,
+                      pressed && styles.primaryPressed,
+                      busy && styles.disabled,
+                    ]}
+                  >
+                    <Text style={styles.primaryLabel}>{busy ? '…' : t('loginNext')}</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <View style={styles.emailSummary}>
+                    <Text style={styles.emailSummaryLabel}>{t('account')}</Text>
+                    <Text style={styles.emailSummaryValue}>{account.trim()}</Text>
+                    <Pressable accessibilityRole="button" onPress={onBackToEmail}>
+                      <Text style={styles.changeEmailLink}>{t('loginChangeEmail')}</Text>
+                    </Pressable>
+                  </View>
 
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+                  <View ref={passwordWrapRef} collapsable={false} style={styles.field}>
+                    <Text style={styles.label}>{t('password')}</Text>
+                    <TextInput
+                      autoFocus
+                      onChangeText={setPassword}
+                      onFocus={() => onFieldFocus(passwordWrapRef)}
+                      onSubmitEditing={() => void onSubmit()}
+                      placeholder="••••••••"
+                      placeholderTextColor={colors.textMuted}
+                      returnKeyType="go"
+                      secureTextEntry
+                      textContentType="password"
+                      style={styles.input}
+                      value={password}
+                    />
+                  </View>
 
-              <Pressable
-                disabled={busy}
-                onPress={onSubmit}
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  pressed && styles.primaryPressed,
-                  busy && styles.disabled,
-                ]}
-              >
-                <Text style={styles.primaryLabel}>{busy ? '…' : t('signIn')}</Text>
-              </Pressable>
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: rememberMe }}
+                    disabled={!credentialsReady}
+                    onPress={() => setRememberMe((v) => !v)}
+                    style={styles.rememberRow}
+                  >
+                    <Ionicons
+                      color={rememberMe ? colors.primary : colors.textMuted}
+                      name={rememberMe ? 'checkbox' : 'square-outline'}
+                      size={22}
+                    />
+                    <Text style={styles.rememberText}>{t('rememberMe')}</Text>
+                  </Pressable>
+
+                  {error ? <Text style={styles.error}>{error}</Text> : null}
+
+                  <Pressable
+                    disabled={busy}
+                    onPress={() => void onSubmit()}
+                    style={({ pressed }) => [
+                      styles.primaryBtn,
+                      pressed && styles.primaryPressed,
+                      busy && styles.disabled,
+                    ]}
+                  >
+                    <Text style={styles.primaryLabel}>{busy ? '…' : t('signIn')}</Text>
+                  </Pressable>
+                </>
+              )}
 
               <View style={styles.cardFooter}>
                 <Link href="/forgot-password">
                   <Text style={styles.linkText}>{t('forgotPasswordLink')}</Text>
-                </Link>
-                <Link href="/activate">
-                  <Text style={styles.linkText}>{t('activateLink')}</Text>
                 </Link>
               </View>
             </View>
@@ -298,6 +370,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textMuted,
   },
+  cardHint: {
+    marginTop: 6,
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
@@ -314,6 +393,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     backgroundColor: '#FAFBFD',
+  },
+  emailSummary: {
+    marginBottom: 14,
+    gap: 4,
+  },
+  emailSummaryLabel: { fontSize: 13, color: colors.textMuted, fontWeight: '700' },
+  emailSummaryValue: { fontSize: 16, color: colors.text, fontWeight: '600' },
+  changeEmailLink: {
+    marginTop: 4,
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+    alignSelf: 'flex-start',
   },
   rememberRow: {
     flexDirection: 'row',

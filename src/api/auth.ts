@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 import type {
+  AppAccountLookup,
   AppActivationRequest,
   AppActivationSendCode,
   AppActivationSendCodeRequest,
@@ -14,6 +15,15 @@ export function loginWithEmail(email: string, password: string) {
     method: 'POST',
     auth: false,
     body: { email, password },
+  });
+}
+
+/** POST /api/v1/app/auth/lookup — 登录前预检邮箱是否存在、是否已激活 */
+export function lookupAccountByEmail(body: AppActivationSendCodeRequest) {
+  return apiRequest<AppAccountLookup>('/api/v1/app/auth/lookup', {
+    method: 'POST',
+    auth: false,
+    body,
   });
 }
 
