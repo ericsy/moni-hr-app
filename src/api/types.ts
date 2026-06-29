@@ -78,6 +78,12 @@ export type AppActivationSendCode = {
   retryAfterSeconds?: number;
 };
 
+export type AppAccountLookupStatus = 'not_found' | 'needs_activation' | 'ready';
+
+export type AppAccountLookup = {
+  status: AppAccountLookupStatus;
+};
+
 export type AppActivationRequest = {
   email: string;
   code: string;

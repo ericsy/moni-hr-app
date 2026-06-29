@@ -31,6 +31,7 @@ import {
   confirmPasswordReset,
   fetchCurrentEmployee,
   loginWithEmail,
+  lookupAccountByEmail,
   logoutSession,
   sendActivationCode,
   sendPasswordResetCode,
@@ -44,6 +45,7 @@ import {
   resetUnauthorizedGuard,
 } from '../api/client';
 import { mapEmployeeToUser } from '../api/mapEmployeeUser';
+import type { AppAccountLookupStatus } from '../api/types';
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../api/types';
 import { pickAccessToken } from '../api/types';
@@ -185,6 +187,9 @@ type AuthContextValue = {
   session: Session | null;
   language: 'en' | 'zh';
   login: (account: string, password: string) => Promise<{ ok: boolean; error?: string; message?: string }>;
+  checkAccountStatus: (
+    email: string,
+  ) => Promise<{ ok: boolean; status?: AppAccountLookupStatus; message?: string; error?: string }>;
   logout: () => Promise<void>;
   sendActivationCode: (
     email: string,
@@ -455,6 +460,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     },
     [persistAuth],
   );
+
+  const checkAccountStatus = useCallback(async (email: string) => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      return { ok: false, error: 'empty_email' as const };
+    }
+    try {
+      const result = await lookupAccountByEmail({ email: trimmed });
+      return { ok: true, status: result.status };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : undefined;
+      return { ok: false, error: 'api' as const, message };
+    }
+  }, []);
 
   const logout = useCallback(async () => {
     if (accessTokenRef.current) {
@@ -922,6 +941,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       session,
       language,
       login,
+      checkAccountStatus,
       logout,
       sendActivationCode: sendActivationCodeToEmail,
       activateAccount,
@@ -956,6 +976,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       session,
       language,
       login,
+      checkAccountStatus,
       logout,
       sendActivationCodeToEmail,
       activateAccount,

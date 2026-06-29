@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, Redirect, router } from 'expo-router';
+import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -23,6 +23,7 @@ const DEFAULT_RETRY_SECONDS = 60;
 export default function ActivateScreen() {
   const { t } = useTranslation();
   const { activateAccount, language, sendActivationCode, session, setLanguage } = useAuth();
+  const params = useLocalSearchParams<{ email?: string | string[] }>();
 
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -32,6 +33,14 @@ export default function ActivateScreen() {
   const [busy, setBusy] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [retrySeconds, setRetrySeconds] = useState(0);
+
+  useEffect(() => {
+    const raw = params.email;
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof value === 'string' && value.trim()) {
+      setEmail(value.trim());
+    }
+  }, [params.email]);
 
   useEffect(() => {
     if (retrySeconds <= 0) return;
