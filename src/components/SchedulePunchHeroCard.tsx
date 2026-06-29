@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
+import type { CurrentPunchAction } from '../types/fieldService';
 import { colors } from '../theme/colors';
 import { formatPunchHm } from '../utils/formatPunchTime';
 import { getApproximateServerNowDate } from '../utils/serverClock';
@@ -13,6 +14,7 @@ import {
   minutesUntilShiftStart,
 } from '../utils/scheduleHeroShift';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
+import { isFieldWorkPunchAction, isWorkPunchActionEnabled, workPunchTitleKey } from '../utils/workPunch';
 
 type HeroDisplayMode = 'clock_in' | 'clock_out' | 'clocked_in' | 'completed' | 'idle';
 
@@ -47,13 +49,14 @@ function resolveHeroDisplayMode(
 }
 
 type Props = {
-  slot: MyPublishedShiftSlot;
+  slot?: MyPublishedShiftSlot;
   workDateIso: string;
   todayIso: string;
   punch?: ShiftPunchRecord;
   pairPunch?: ShiftPunchRecord;
   punchesKnown?: boolean;
   punchBusy?: boolean;
+  workAction?: CurrentPunchAction;
   onPunch: () => void | Promise<void>;
 };
 
@@ -65,10 +68,79 @@ export function SchedulePunchHeroCard({
   pairPunch,
   punchesKnown = false,
   punchBusy,
+  workAction,
   onPunch,
 }: Props) {
   const { t, i18n } = useTranslation();
   const now = getApproximateServerNowDate();
+  const workReady = isWorkPunchActionEnabled(workAction);
+  const workWaiting = workAction?.action === 'WAITING';
+  const workDone = workAction?.action === 'DONE';
+
+  if (workReady && workAction) {
+    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
+    const subtitle = workAction.hint ?? '';
+    const isField = isFieldWorkPunchAction(workAction.action);
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <Ionicons color="#fff" name={isField ? 'car-outline' : 'time-outline'} size={28} />
+          </View>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <Pressable
+          accessibilityLabel={title}
+          disabled={punchBusy}
+          onPress={() => void onPunch()}
+          style={({ pressed }) => [
+            styles.punchBtn,
+            punchBusy && styles.punchBtnDisabled,
+            pressed && !punchBusy && styles.punchBtnPressed,
+          ]}
+        >
+          <View style={styles.punchCircle}>
+            {punchBusy ? (
+              <ActivityIndicator color={colors.text} size="small" />
+            ) : (
+              <Ionicons color={colors.text} name="finger-print" size={32} />
+            )}
+          </View>
+          <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if ((workWaiting || workDone) && workAction) {
+    const title =
+      workAction.buttonLabel ||
+      (workDone ? t('todayActionDone') : t('todayActionWaiting'));
+    const subtitle = workAction.hint ?? '';
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <Ionicons color="#fff" name="time-outline" size={28} />
+          </View>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <View style={styles.punchBtn}>
+          <View style={[styles.punchCircle, styles.punchCircleDone]}>
+            <Ionicons color={workDone ? colors.success : colors.textMuted} name="checkmark-circle" size={36} />
+          </View>
+          <Text style={styles.punchBtnText}>{workDone ? t('todayActionDone') : t('todayActionWaiting')}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!slot) return null;
+
   const actions = getShiftCardActions(
     workDateIso,
     slot.range,

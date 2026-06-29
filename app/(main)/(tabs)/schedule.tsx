@@ -22,8 +22,9 @@ import {
   type MyPublishedShiftSlot,
 } from '../../../src/api/mapPublishedSchedule';
 import { fetchMyPublishedSchedule } from '../../../src/api/schedule';
+import { fetchTodayWorkSummary } from '../../../src/api/todayWork';
+import { FieldJobRow } from '../../../src/components/FieldJobRow';
 import { SchedulePunchHeroCard } from '../../../src/components/SchedulePunchHeroCard';
-import { BrandLogo } from '../../../src/components/BrandLogo';
 import { TodayShiftRow } from '../../../src/components/TodayShiftRow';
 import { getActiveStore, useAuth } from '../../../src/context/AuthContext';
 import { useRefreshOnAppForeground } from '../../../src/hooks/useRefreshOnAppForeground';
@@ -44,6 +45,12 @@ import { pickHeroShiftIndex } from '../../../src/utils/scheduleHeroShift';
 import { canApplyMissedPunchForShift, getShiftCardActions } from '../../../src/utils/shiftClockWindow';
 import { doesPunchCoverScheduledShift } from '../../../src/utils/shiftLeaveEligibility';
 import { getApproximateServerNowDate } from '../../../src/utils/serverClock';
+import { resolveFieldJobsForSchedule } from '../../../src/utils/fieldJobsSchedule';
+import type { TimelineFieldJobItem, TodayWorkSummary, TodayWorkTimelineItem } from '../../../src/types/fieldService';
+import {
+  executeWorkPunch,
+  isWorkPunchActionEnabled,
+} from '../../../src/utils/workPunch';
 
 function parseIsoToLocalDate(iso: string): Date {
   const [y, m, d] = iso.split('-').map(Number);
@@ -85,6 +92,10 @@ export default function ScheduleScreen() {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [punchBusyId, setPunchBusyId] = useState<string | null>(null);
+  const [fieldJobsByShiftId, setFieldJobsByShiftId] = useState<Record<string, TimelineFieldJobItem[]>>({});
+  const [standaloneFieldJobs, setStandaloneFieldJobs] = useState<TimelineFieldJobItem[]>([]);
+  const [fieldTimeline, setFieldTimeline] = useState<TodayWorkTimelineItem[]>([]);
+  const [workSummary, setWorkSummary] = useState<TodayWorkSummary | null>(null);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const punchesKnown = isShiftPunchDateLoaded(todayIso);
@@ -136,6 +147,33 @@ export default function ScheduleScreen() {
     }
   }, [selectedStoreId, todayIso, t, mergePublishedSchedule]);
 
+  const loadTodayFieldJobs = useCallback(async () => {
+    if (!selectedStoreId) {
+      setFieldTimeline([]);
+      setWorkSummary(null);
+      return;
+    }
+    try {
+      const summary = await fetchTodayWorkSummary({ storeId: selectedStoreId, date: todayIso });
+      setWorkSummary(summary);
+      setFieldTimeline(summary.timeline);
+    } catch {
+      setFieldTimeline([]);
+      setWorkSummary(null);
+    }
+  }, [selectedStoreId, todayIso]);
+
+  useEffect(() => {
+    const resolved = resolveFieldJobsForSchedule(todayShifts, fieldTimeline);
+    setFieldJobsByShiftId(resolved.fieldJobsByShiftId);
+    setStandaloneFieldJobs(resolved.standaloneFieldJobs);
+  }, [todayShifts, fieldTimeline]);
+
+  const totalFieldJobs = useMemo(() => {
+    const nested = Object.values(fieldJobsByShiftId).flat();
+    return nested.length + standaloneFieldJobs.length;
+  }, [fieldJobsByShiftId, standaloneFieldJobs]);
+
   const loadTodayPunches = useCallback(async () => {
     if (!selectedStoreId) return;
     await refreshShiftPunchesForDate(todayIso);
@@ -162,6 +200,11 @@ export default function ScheduleScreen() {
 
   useEffect(() => {
     if (!session?.user || !selectedStoreId) return;
+    void loadTodayFieldJobs();
+  }, [session?.user, selectedStoreId, loadTodayFieldJobs]);
+
+  useEffect(() => {
+    if (!session?.user || !selectedStoreId) return;
     void loadTodayPunches();
   }, [session?.user, selectedStoreId, todayShifts, loadTodayPunches]);
 
@@ -179,6 +222,12 @@ export default function ScheduleScreen() {
   );
 
   const heroSlot = heroIndex >= 0 ? todayShifts[heroIndex] : undefined;
+  const workAction = workSummary?.currentPunchAction;
+  const showHeroCard =
+    !!heroSlot ||
+    isWorkPunchActionEnabled(workAction) ||
+    workAction?.action === 'WAITING' ||
+    workAction?.action === 'DONE';
 
   const runPunch = useCallback(
     async (slot: MyPublishedShiftSlot) => {
@@ -211,14 +260,48 @@ export default function ScheduleScreen() {
     [getShiftPunch, getPairPunch, todayIso, punchesKnown, punchShift, t],
   );
 
+  const onHeroPunch = useCallback(async () => {
+    const action = workSummary?.currentPunchAction;
+    if (isWorkPunchActionEnabled(action) && action && selectedStoreId) {
+      setPunchBusyId('work');
+      try {
+        const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
+        setWorkSummary(summary);
+        setFieldTimeline(summary.timeline);
+        await loadTodayPunches();
+        Alert.alert(t('tabSchedule'), t('punchSuccess'));
+      } catch (e) {
+        if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
+          Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
+          return;
+        }
+        const message = e instanceof ApiError ? e.message : t('punchFailed');
+        Alert.alert(t('tabSchedule'), message);
+      } finally {
+        setPunchBusyId(null);
+      }
+      return;
+    }
+    if (heroSlot) {
+      await runPunch(heroSlot);
+    }
+  }, [workSummary, selectedStoreId, loadTodayPunches, t, heroSlot, runPunch]);
+
   const refreshPageData = useCallback(async () => {
     await Promise.all([
       refreshCurrentEmployee(),
       loadTodaySchedule(),
+      loadTodayFieldJobs(),
       loadTodayPunches(),
       refreshAttendanceRequests(),
     ]);
-  }, [refreshCurrentEmployee, loadTodaySchedule, loadTodayPunches, refreshAttendanceRequests]);
+  }, [
+    refreshCurrentEmployee,
+    loadTodaySchedule,
+    loadTodayFieldJobs,
+    loadTodayPunches,
+    refreshAttendanceRequests,
+  ]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -261,8 +344,11 @@ export default function ScheduleScreen() {
         <View style={styles.headerBlock}>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{t('tabSchedule')}</Text>
-            <View pointerEvents="none">
-              <BrandLogo size={56} style={styles.headerArt} />
+            <View style={styles.headerArt} pointerEvents="none">
+              <Ionicons color={colors.primarySoft} name="calendar" size={56} />
+              <View style={styles.headerArtClock}>
+                <Ionicons color={colors.primary} name="time" size={22} />
+              </View>
             </View>
           </View>
           <View style={styles.headerQuickLinks}>
@@ -335,17 +421,18 @@ export default function ScheduleScreen() {
               <Text style={styles.retryBtnText}>{t('retry')}</Text>
             </Pressable>
           </View>
-        ) : heroSlot ? (
+        ) : showHeroCard ? (
           <SchedulePunchHeroCard
-            key={heroSlot.id}
+            key={heroSlot?.id ?? 'work-hero'}
             slot={heroSlot}
             workDateIso={todayIso}
             todayIso={todayIso}
-            punch={getShiftPunch(todayIso, heroSlot)}
-            pairPunch={getPairPunch(heroSlot)}
+            punch={heroSlot ? getShiftPunch(todayIso, heroSlot) : undefined}
+            pairPunch={heroSlot ? getPairPunch(heroSlot) : undefined}
             punchesKnown={punchesKnown}
-            punchBusy={punchBusyId === heroSlot.id}
-            onPunch={() => runPunch(heroSlot)}
+            punchBusy={punchBusyId === 'work' || (heroSlot ? punchBusyId === heroSlot.id : false)}
+            workAction={workAction}
+            onPunch={onHeroPunch}
           />
         ) : null}
 
@@ -354,7 +441,7 @@ export default function ScheduleScreen() {
             <View style={styles.todayPanelBar} />
             <Text style={styles.todayPanelTitle}>{t('todayShiftsTitle')}</Text>
           </View>
-          {todayShifts.length === 0 && !scheduleLoading ? (
+          {todayShifts.length === 0 && totalFieldJobs === 0 && !scheduleLoading ? (
             <View style={styles.todayEmpty}>
               <Text style={styles.todayEmptyText}>{t('noShiftsToday')}</Text>
             </View>
@@ -399,47 +486,61 @@ export default function ScheduleScreen() {
                   doesPunchCoverScheduledShift(punch, s.range) ||
                   isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, todayIso, s, s.range);
                 return (
-                  <TodayShiftRow
-                    key={s.id}
-                    slot={s}
-                    index={slotIndex}
-                    workDateIso={todayIso}
-                    todayIso={todayIso}
-                    punch={punch}
-                    pairPunch={pairPunch}
-                    punchesKnown={punchesKnown}
-                    leaveRequestStatus={leaveRequestStatus}
-                    missedPunchApplyBlocked={missedPunchApplyBlocked}
-                    leaveApplyBlocked={leaveApplyBlocked}
-                    onApplyMissed={() => {
-                      if (missedPunchTooEarly) {
-                        Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
-                        return;
-                      }
-                      if (missedPunchBlockedByLeave) {
-                        Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
-                        return;
-                      }
-                      if (missedPunchApplyBlocked) {
-                        Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
-                        return;
-                      }
-                      openApply(slotIndex, 'missed_punch');
-                    }}
-                    onApplyLeave={() => {
-                      if (leavePending) {
-                        Alert.alert(t('typeLeave'), t('leaveShiftAlreadyPending'));
-                        return;
-                      }
-                      if (leaveApplyBlocked) {
-                        Alert.alert(t('typeLeave'), t('leaveShiftPunchCovered'));
-                        return;
-                      }
-                      openApply(slotIndex, 'leave');
-                    }}
-                  />
+                  <View key={s.id} style={styles.shiftGroup}>
+                    <TodayShiftRow
+                      slot={s}
+                      index={slotIndex}
+                      workDateIso={todayIso}
+                      todayIso={todayIso}
+                      punch={punch}
+                      pairPunch={pairPunch}
+                      punchesKnown={punchesKnown}
+                      leaveRequestStatus={leaveRequestStatus}
+                      missedPunchApplyBlocked={missedPunchApplyBlocked}
+                      leaveApplyBlocked={leaveApplyBlocked}
+                      onApplyMissed={() => {
+                        if (missedPunchTooEarly) {
+                          Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
+                          return;
+                        }
+                        if (missedPunchBlockedByLeave) {
+                          Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
+                          return;
+                        }
+                        if (missedPunchApplyBlocked) {
+                          Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
+                          return;
+                        }
+                        openApply(slotIndex, 'missed_punch');
+                      }}
+                      onApplyLeave={() => {
+                        if (leavePending) {
+                          Alert.alert(t('typeLeave'), t('leaveShiftAlreadyPending'));
+                          return;
+                        }
+                        if (leaveApplyBlocked) {
+                          Alert.alert(t('typeLeave'), t('leaveShiftPunchCovered'));
+                          return;
+                        }
+                        openApply(slotIndex, 'leave');
+                      }}
+                    />
+                    {(fieldJobsByShiftId[s.id] ?? []).map((job) => (
+                      <FieldJobRow key={job.id || `${s.id}-field-${job.start}`} job={job} nested />
+                    ))}
+                  </View>
                 );
               })}
+              {standaloneFieldJobs.length > 0 ? (
+                <View style={styles.fieldJobsSection}>
+                  {todayShifts.length > 0 ? (
+                    <Text style={styles.fieldJobsSectionTitle}>{t('scheduleFieldJobsTitle')}</Text>
+                  ) : null}
+                  {standaloneFieldJobs.map((job) => (
+                    <FieldJobRow key={job.id || `standalone-${job.start}`} job={job} />
+                  ))}
+                </View>
+              ) : null}
             </View>
           )}
           <Pressable
@@ -505,7 +606,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   title: { fontSize: 26, fontWeight: '800', color: colors.text, flex: 1 },
-  headerArt: { marginBottom: 2 },
+  headerArt: { width: 64, height: 56, alignItems: 'center', justifyContent: 'center' },
+  headerArtClock: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.primarySoft,
+  },
   headerQuickLinks: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -560,7 +674,10 @@ const styles = StyleSheet.create({
   todayPanelHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   todayPanelBar: { width: 4, height: 18, borderRadius: 2, backgroundColor: colors.primary },
   todayPanelTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
-  todayList: {},
+  fieldJobsSection: { gap: 10, marginTop: 4 },
+  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: '#7C3AED', marginTop: 4 },
+  todayList: { gap: 10 },
+  shiftGroup: { gap: 0 },
   todayEmpty: { paddingVertical: 24, alignItems: 'center' },
   todayEmptyText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
   viewMoreLink: {

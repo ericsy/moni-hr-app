@@ -27,7 +27,9 @@ import {
   type StoreRosterStaffEntry,
 } from '../../src/api/mapStorePublishedSchedule';
 import { fetchMyPublishedSchedule, fetchStorePublishedSchedule } from '../../src/api/schedule';
+import { FieldJobRow } from '../../src/components/FieldJobRow';
 import { MyShiftCard } from '../../src/components/MyShiftCard';
+import { SchedulePunchHeroCard } from '../../src/components/SchedulePunchHeroCard';
 import { getActiveStore, useAuth } from '../../src/context/AuthContext';
 import {
   getShiftLeaveRequestStatus,
@@ -39,12 +41,20 @@ import {
   isShiftLeaveBlockedByMissedPunch,
 } from '../../src/utils/missedPunchEligibility';
 import { doesPunchCoverScheduledShift } from '../../src/utils/shiftLeaveEligibility';
-import { canApplyMissedPunchForShift } from '../../src/utils/shiftClockWindow';
+import { canApplyMissedPunchForShift, getShiftCardActions } from '../../src/utils/shiftClockWindow';
 import { openShiftRequest } from '../../src/utils/openShiftRequest';
 import { colors } from '../../src/theme/colors';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
+import { pickHeroShiftIndex } from '../../src/utils/scheduleHeroShift';
+import { fetchWorkSummariesByDates, resolveFieldJobsForSchedule } from '../../src/utils/fieldJobsSchedule';
+import type { TimelineFieldJobItem, TodayWorkSummary } from '../../src/types/fieldService';
+import {
+  executeWorkPunch,
+  isWorkPunchActionEnabled,
+  workPunchMatchesStoreShift,
+} from '../../src/utils/workPunch';
 import { canViewStoreRoster } from '../../src/utils/storeManagement';
 import {
   formatSelectedHeaderLine,
@@ -74,9 +84,10 @@ function dayHasWork(
   mode: 'my' | 'store',
   myShiftsByDate: Record<string, MyPublishedShiftSlot[]>,
   storeRosterByDate: Record<string, StoreDayRegionGroup[]>,
+  fieldJobsByDate: Record<string, TimelineFieldJobItem[]>,
 ): boolean {
   if (mode === 'my') {
-    return (myShiftsByDate[iso]?.length ?? 0) > 0;
+    return (myShiftsByDate[iso]?.length ?? 0) > 0 || (fieldJobsByDate[iso]?.length ?? 0) > 0;
   }
   const roster = storeRosterByDate[iso] ?? [];
   return roster.some((rg) => rg.shifts.some((sh) => sh.staff.length > 0));
@@ -184,6 +195,8 @@ export default function ScheduleWeekScreen() {
   const [storeScheduleLoading, setStoreScheduleLoading] = useState(false);
   const [storeScheduleError, setStoreScheduleError] = useState<string | null>(null);
   const [punchBusyId, setPunchBusyId] = useState<string | null>(null);
+  const [fieldTimelineByDate, setFieldTimelineByDate] = useState<Record<string, TodayWorkSummary['timeline']>>({});
+  const [workSummariesByDate, setWorkSummariesByDate] = useState<Record<string, TodayWorkSummary>>({});
 
   const weekEndIso = useMemo(() => calendarDateKey(addDays(weekStart, 6)), [weekStart]);
   const weekStartIso = useMemo(() => calendarDateKey(weekStart), [weekStart]);
@@ -254,6 +267,22 @@ export default function ScheduleWeekScreen() {
     }
   }, [selectedStoreId, canSeeStore, weekStartIso, weekEndIso, t]);
 
+  const loadFieldJobsForWeek = useCallback(async () => {
+    if (!selectedStoreId) {
+      setFieldTimelineByDate({});
+      setWorkSummariesByDate({});
+      return;
+    }
+    const dateIsos = Array.from({ length: 7 }, (_, i) => calendarDateKey(addDays(weekStart, i)));
+    const summaries = await fetchWorkSummariesByDates(selectedStoreId, dateIsos);
+    setWorkSummariesByDate(summaries);
+    const timelines: Record<string, TodayWorkSummary['timeline']> = {};
+    for (const [date, summary] of Object.entries(summaries)) {
+      timelines[date] = summary.timeline;
+    }
+    setFieldTimelineByDate(timelines);
+  }, [selectedStoreId, weekStart]);
+
   useEffect(() => {
     if (!session?.user || !selectedStoreId) return;
     void loadMySchedule();
@@ -263,6 +292,11 @@ export default function ScheduleWeekScreen() {
     if (!session?.user || !selectedStoreId || !canSeeStore) return;
     void loadStoreSchedule();
   }, [session?.user, selectedStoreId, canSeeStore, loadStoreSchedule]);
+
+  useEffect(() => {
+    if (!session?.user || !selectedStoreId) return;
+    void loadFieldJobsForWeek();
+  }, [session?.user, selectedStoreId, loadFieldJobsForWeek]);
 
   const loadDayPunches = useCallback(async () => {
     if (!selectedStoreId || !selected) return;
@@ -291,12 +325,61 @@ export default function ScheduleWeekScreen() {
   }, [session?.user, selectedStoreId, selected, loadDayPunches]);
 
   const myShifts = myShiftsByDate[selected] ?? [];
+  const todayIso = calendarDateKey(getApproximateServerNowDate());
+  const punchesKnown = isShiftPunchDateLoaded(selected);
+  const fieldJobsByDate = useMemo(() => {
+    const map: Record<string, TimelineFieldJobItem[]> = {};
+    for (const [date, timeline] of Object.entries(fieldTimelineByDate)) {
+      const shifts = myShiftsByDate[date] ?? [];
+      const resolved = resolveFieldJobsForSchedule(shifts, timeline);
+      map[date] = resolved.allFieldJobs;
+    }
+    return map;
+  }, [fieldTimelineByDate, myShiftsByDate]);
+  const selectedFieldResolved = useMemo(
+    () => resolveFieldJobsForSchedule(myShifts, fieldTimelineByDate[selected] ?? []),
+    [myShifts, fieldTimelineByDate, selected],
+  );
+  const selectedFieldGroups = {
+    byShiftId: selectedFieldResolved.fieldJobsByShiftId,
+    standalone: selectedFieldResolved.standaloneFieldJobs,
+  };
+  const selectedFieldJobCount = selectedFieldResolved.allFieldJobs.length;
+  const selectedWorkSummary = workSummariesByDate[selected];
+  const workAction = selectedWorkSummary?.currentPunchAction;
+  const isTodaySelected = selected === todayIso;
+  const getPairPunchForSlot = useCallback(
+    (slot: MyPublishedShiftSlot) => {
+      if (slot.overnightRole === 'end' && slot.overnightPairCellId) {
+        return shiftPunches.find((p) => p.scheduleId === slot.overnightPairCellId);
+      }
+      return undefined;
+    },
+    [shiftPunches],
+  );
+  const heroIndex = useMemo(() => {
+    if (!isTodaySelected) return -1;
+    return pickHeroShiftIndex(
+      myShifts,
+      selected,
+      todayIso,
+      (s) => getShiftPunch(selected, s),
+      getPairPunchForSlot,
+      punchesKnown,
+    );
+  }, [isTodaySelected, myShifts, selected, todayIso, getShiftPunch, getPairPunchForSlot, punchesKnown, shiftPunches]);
+  const heroSlot = heroIndex >= 0 ? myShifts[heroIndex] : undefined;
+  const showHeroCard =
+    isTodaySelected &&
+    mode === 'my' &&
+    (!!heroSlot ||
+      isWorkPunchActionEnabled(workAction) ||
+      workAction?.action === 'WAITING' ||
+      workAction?.action === 'DONE');
   const storeDayRoster = useMemo(
     () => storeRosterByDate[selected] ?? [],
     [selected, storeRosterByDate],
   );
-  const todayIso = calendarDateKey(getApproximateServerNowDate());
-  const punchesKnown = isShiftPunchDateLoaded(selected);
 
   const selectedDateObj = useMemo(() => parseIsoToLocalDate(selected), [selected]);
   const dateLang = language ?? i18n.language;
@@ -319,6 +402,7 @@ export default function ScheduleWeekScreen() {
     const tasks: Promise<unknown>[] = [
       refreshCurrentEmployee(),
       loadMySchedule(),
+      loadFieldJobsForWeek(),
       loadDayPunches(),
       refreshAttendanceRequests(),
     ];
@@ -329,6 +413,7 @@ export default function ScheduleWeekScreen() {
   }, [
     refreshCurrentEmployee,
     loadMySchedule,
+    loadFieldJobsForWeek,
     loadDayPunches,
     refreshAttendanceRequests,
     canSeeStore,
@@ -361,6 +446,28 @@ export default function ScheduleWeekScreen() {
 
   const runPunch = useCallback(
     async (slotId: string, kind: 'in' | 'out') => {
+      const action = workSummariesByDate[selected]?.currentPunchAction;
+      if (selected === todayIso && workPunchMatchesStoreShift(action, slotId) && action && selectedStoreId) {
+        setPunchBusyId(slotId);
+        try {
+          const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
+          setWorkSummariesByDate((prev) => ({ ...prev, [selected]: summary }));
+          setFieldTimelineByDate((prev) => ({ ...prev, [selected]: summary.timeline }));
+          await loadDayPunches();
+          Alert.alert(t('tabSchedule'), t('punchSuccess'));
+        } catch (e) {
+          if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
+            Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
+            return;
+          }
+          const message = e instanceof ApiError ? e.message : t('punchFailed');
+          Alert.alert(t('tabSchedule'), message);
+        } finally {
+          setPunchBusyId(null);
+        }
+        return;
+      }
+
       setPunchBusyId(slotId);
       try {
         const r = await punchShift(slotId, selected, kind);
@@ -373,8 +480,60 @@ export default function ScheduleWeekScreen() {
         setPunchBusyId(null);
       }
     },
-    [punchShift, selected, t],
+    [workSummariesByDate, selected, todayIso, selectedStoreId, loadDayPunches, punchShift, t],
   );
+
+  const onHeroPunch = useCallback(async () => {
+    const action = workSummariesByDate[selected]?.currentPunchAction;
+    if (isWorkPunchActionEnabled(action) && action && selectedStoreId) {
+      setPunchBusyId('work');
+      try {
+        const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
+        setWorkSummariesByDate((prev) => ({ ...prev, [selected]: summary }));
+        setFieldTimelineByDate((prev) => ({ ...prev, [selected]: summary.timeline }));
+        await loadDayPunches();
+        Alert.alert(t('tabSchedule'), t('punchSuccess'));
+      } catch (e) {
+        if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
+          Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
+          return;
+        }
+        const message = e instanceof ApiError ? e.message : t('punchFailed');
+        Alert.alert(t('tabSchedule'), message);
+      } finally {
+        setPunchBusyId(null);
+      }
+      return;
+    }
+    if (heroSlot) {
+      const punch = getShiftPunch(selected, heroSlot);
+      const pairPunch = getPairPunchForSlot(heroSlot);
+      const actions = getShiftCardActions(
+        selected,
+        heroSlot.range,
+        punch,
+        todayIso,
+        getApproximateServerNowDate(),
+        punchesKnown,
+        heroSlot.overnightRole ?? 'normal',
+        pairPunch,
+      );
+      const kind = actions.showClockOut ? 'out' : 'in';
+      await runPunch(heroSlot.id, kind);
+    }
+  }, [
+    workSummariesByDate,
+    selected,
+    selectedStoreId,
+    loadDayPunches,
+    t,
+    heroSlot,
+    getShiftPunch,
+    getPairPunchForSlot,
+    todayIso,
+    punchesKnown,
+    runPunch,
+  ]);
 
   return (
     <>
@@ -464,7 +623,7 @@ export default function ScheduleWeekScreen() {
           {days.map((d) => {
             const active = d.iso === selected;
             const weekdayIdx = (d.date.getDay() + 6) % 7;
-            const hasWork = dayHasWork(d.iso, mode, myShiftsByDate, storeRosterByDate);
+            const hasWork = dayHasWork(d.iso, mode, myShiftsByDate, storeRosterByDate, fieldJobsByDate);
             return (
               <Pressable
                 key={d.iso}
@@ -493,6 +652,21 @@ export default function ScheduleWeekScreen() {
         </View>
 
         {mode === 'store' && canSeeStore ? <StoreRosterLegendBar t={t} /> : null}
+
+        {showHeroCard ? (
+          <SchedulePunchHeroCard
+            key={heroSlot?.id ?? 'work-hero'}
+            slot={heroSlot}
+            workDateIso={selected}
+            todayIso={todayIso}
+            punch={heroSlot ? getShiftPunch(selected, heroSlot) : undefined}
+            pairPunch={heroSlot ? getPairPunchForSlot(heroSlot) : undefined}
+            punchesKnown={punchesKnown}
+            punchBusy={punchBusyId === 'work' || (heroSlot ? punchBusyId === heroSlot.id : false)}
+            workAction={workAction}
+            onPunch={onHeroPunch}
+          />
+        ) : null}
 
       <View style={styles.panel}>
         {mode === 'store' ? (
@@ -576,7 +750,7 @@ export default function ScheduleWeekScreen() {
               <Text style={styles.retryBtnText}>{t('retry')}</Text>
             </Pressable>
           </View>
-        ) : myShifts.length === 0 ? (
+        ) : myShifts.length === 0 && selectedFieldJobCount === 0 ? (
           <View style={styles.emptyWrap}>
             <Ionicons color={colors.textMuted} name="calendar-outline" size={48} />
             <Text style={styles.empty}>{t('noShifts')}</Text>
@@ -634,51 +808,65 @@ export default function ScheduleWeekScreen() {
                 openShiftRequest({ type, workDate: selected, slots: myShifts, slotIndex });
               };
               return (
-                <MyShiftCard
-                  key={s.id}
-                  slot={s}
-                  workDateIso={selected}
-                  todayIso={todayIso}
-                  punch={punch}
-                  pairPunch={pairPunch}
-                  punchesKnown={punchesKnown}
-                  punchBusy={punchBusyId === s.id}
-                  missedPunchApplyBlocked={missedPunchApplyBlocked}
-                  missedPunchPendingStatus={missedPunchPendingStatus}
-                  missedPunchOpen={missedPunchOpen}
-                  leaveRequestStatus={leaveRequestStatus}
-                  leaveApplyBlocked={leaveApplyBlocked}
-                  onClockIn={() => void runPunch(s.id, 'in')}
-                  onClockOut={() => void runPunch(s.id, 'out')}
-                  onApplyMissed={() => {
-                    if (missedPunchTooEarly) {
-                      Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
-                      return;
-                    }
-                    if (missedPunchBlockedByLeave) {
-                      Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
-                      return;
-                    }
-                    if (missedPunchApplyBlocked) {
-                      Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
-                      return;
-                    }
-                    openApply('missed_punch');
-                  }}
-                  onApplyLeave={() => {
-                    if (leavePending) {
-                      Alert.alert(t('typeLeave'), t('leaveShiftAlreadyPending'));
-                      return;
-                    }
-                    if (leaveApplyBlocked) {
-                      Alert.alert(t('typeLeave'), t('leaveShiftPunchCovered'));
-                      return;
-                    }
-                    openApply('leave');
-                  }}
-                />
+                <View key={s.id} style={styles.shiftGroup}>
+                  <MyShiftCard
+                    slot={s}
+                    workDateIso={selected}
+                    todayIso={todayIso}
+                    punch={punch}
+                    pairPunch={pairPunch}
+                    punchesKnown={punchesKnown}
+                    punchBusy={punchBusyId === s.id}
+                    missedPunchApplyBlocked={missedPunchApplyBlocked}
+                    missedPunchPendingStatus={missedPunchPendingStatus}
+                    missedPunchOpen={missedPunchOpen}
+                    leaveRequestStatus={leaveRequestStatus}
+                    leaveApplyBlocked={leaveApplyBlocked}
+                    onClockIn={() => void runPunch(s.id, 'in')}
+                    onClockOut={() => void runPunch(s.id, 'out')}
+                    onApplyMissed={() => {
+                      if (missedPunchTooEarly) {
+                        Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
+                        return;
+                      }
+                      if (missedPunchBlockedByLeave) {
+                        Alert.alert(t('typeMissedPunch'), t('missedPunchBlockedByLeave'));
+                        return;
+                      }
+                      if (missedPunchApplyBlocked) {
+                        Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
+                        return;
+                      }
+                      openApply('missed_punch');
+                    }}
+                    onApplyLeave={() => {
+                      if (leavePending) {
+                        Alert.alert(t('typeLeave'), t('leaveShiftAlreadyPending'));
+                        return;
+                      }
+                      if (leaveApplyBlocked) {
+                        Alert.alert(t('typeLeave'), t('leaveShiftPunchCovered'));
+                        return;
+                      }
+                      openApply('leave');
+                    }}
+                  />
+                  {(selectedFieldGroups.byShiftId[s.id] ?? []).map((job) => (
+                    <FieldJobRow key={job.id || `${s.id}-field-${job.start}`} job={job} nested />
+                  ))}
+                </View>
               );
             })}
+            {selectedFieldGroups.standalone.length > 0 ? (
+              <View style={styles.fieldJobsSection}>
+                {myShifts.length > 0 ? (
+                  <Text style={styles.fieldJobsSectionTitle}>{t('scheduleFieldJobsTitle')}</Text>
+                ) : null}
+                {selectedFieldGroups.standalone.map((job) => (
+                  <FieldJobRow key={job.id || `standalone-${job.start}`} job={job} />
+                ))}
+              </View>
+            ) : null}
           </View>
         )}
       </View>
@@ -879,6 +1067,9 @@ const styles = StyleSheet.create({
   workDotPlaceholder: { marginTop: 4, height: 5 },
   panel: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
   list: { gap: 12, paddingBottom: 24 },
+  shiftGroup: { gap: 8 },
+  fieldJobsSection: { gap: 10, marginTop: 4 },
+  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: '#7C3AED', marginTop: 4 },
   storeDayView: { gap: 14 },
   storeRegionCard: {
     borderRadius: 16,

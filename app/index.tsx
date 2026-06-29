@@ -24,7 +24,7 @@ export default function Index() {
     return <Redirect href="/activate" />;
   }
 
-  return <Redirect href="/today" />;
+  return <Redirect href="/schedule" />;
 }
 
 const styles = StyleSheet.create({

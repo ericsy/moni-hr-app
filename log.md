@@ -2,6 +2,22 @@
 
 ## 2026-06-29
 
+- **排班 Hero 打卡统一店班+外勤**：
+  - 新增 **`src/utils/workPunch.ts`**，排班页蓝色 Hero 按钮根据 **`today-work-summary.currentPunchAction`** 自动切换「到店上班/下班」「开始/完成外勤」等动作，统一走 **`POST /api/v1/app/work/punch`**；无工作流动作时仍走原 **`punchShift`** 店班打卡。
+  - **`schedule-week.tsx`** 今日视图同步支持 Hero 统一打卡。
+
+- **外勤并入排班表（日/周）**：
+  - 新增 **`src/utils/fieldJobsSchedule.ts`**、**`src/components/FieldJobRow.tsx`**，从 **`today-work-summary`** 拉取外勤工单并挂到对应门店班次下。
+  - 修复外勤不显示：**`resolveFieldJobsForSchedule()`** 处理班次 id 不一致与加载竞态；**`mapTodayWorkSummary`** 兼容更多后端字段/嵌套结构。
+  - **`schedule.tsx`** 今日班次列表展示外勤行（嵌套在班次下或独立显示）。
+  - **`schedule-week.tsx`** 周视图同步展示外勤；日期圆点在有外勤时也会标记。
+
+- **外勤导航回退（不占用 Tab Bar）**：
+  - 底部 Tab 恢复为 **排班 / 我的**（移除「今日」Tab）。
+  - 登录默认入口恢复 **`/schedule`**。
+  - 外勤页迁至 **`app/(main)/today.tsx`**（Stack 子页，路由 **`/today`**），功能与 API 保留。
+  - 排班首页标题区恢复日历+时钟装饰（不再使用 `BrandLogo`）。
+
 - **激活页 Android 键盘遮挡**：**`app/(auth)/activate.tsx`** 接入 **`useScrollInputAboveKeyboard`**（与登录/忘记密码页一致），聚焦验证码/密码时自动上滚，避免输入框被键盘盖住。
 
 - **App 登录分步流程**：登录页先输入邮箱点「下一步」，调用 **`POST /api/v1/app/auth/lookup`** 预检；不存在提示账号不存在，未激活跳转激活页，已激活再显示密码框。移除登录页「账户激活」入口。
@@ -316,3 +332,8 @@
 - UI：跨天夜班各段排班卡片/申请页改为显示**本段** `range`（如 `22:00–23:59` / `00:00–06:00`），不再合并为 `22:00–06:00`。
 - 修复：`request-create` 路由参数 `useEffect` 无限 setState 导致 Maximum update depth exceeded；改为稳定 `routeParamsKey` + 仅值变化时更新 state。
 - 修复 Android 请假闪退：路由参数去除 Unicode 时段/区域名（en-dash 等）；`InteractionManager` 延迟跳转；请假页加载完成前不清除已选班次；提交 payload 键对齐 `cell:` 键；`TimeSelectField` Android 禁用 `fontVariant`。
+
+## 2026-06-29
+
+- 服务端（moni-hr）：外勤同步店班不再在派单时写入 `linkedStoreShiftId`（`published_cell.id` 每次重发布会变）；打卡/汇总时按外勤与店班**时段重叠**动态匹配当前排班 cell，再写入店班打卡记录；派单仍保留 `syncStoreClockIn/Out` 开关与时间对齐校验（R1/R2）。
+- 商家端（moni-hr-merchant）：派单/新建编辑外勤工单时支持勾选「同步店班上班/下班」；按员工店班与外勤时段重叠预览并校验；改派保留已有同步配置。

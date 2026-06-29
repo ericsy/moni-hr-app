@@ -30,13 +30,6 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen
-        name="today"
-        options={{
-          title: t('tabToday'),
-          tabBarIcon: ({ color, size }) => <Ionicons color={color} name="calendar-outline" size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="schedule"
         options={{
           title: t('tabSchedule'),
