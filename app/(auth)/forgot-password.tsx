@@ -45,8 +45,9 @@ export default function ForgotPasswordScreen() {
     scrollYRef,
     keyboardHeight,
     onFieldFocus,
+    onScrollViewLayout,
     scrollContentPaddingBottom,
-  } = useScrollInputAboveKeyboard({ topChrome: 44 });
+  } = useScrollInputAboveKeyboard({ bottomGap: 32 });
 
   useEffect(() => {
     if (retrySeconds <= 0) return;
@@ -151,6 +152,7 @@ export default function ForgotPasswordScreen() {
           ]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          onLayout={onScrollViewLayout}
           onScroll={(e) => {
             scrollYRef.current = e.nativeEvent.contentOffset.y;
           }}

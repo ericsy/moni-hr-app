@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   KeyboardAvoidingView,
@@ -21,6 +21,22 @@ import { colors } from '../../src/theme/colors';
 
 const DEFAULT_RETRY_SECONDS = 60;
 
+type FocusedField = 'none' | 'email' | 'code' | 'password' | 'confirm';
+
+const REVEAL_RETRY_MS = [80, 200, 400, 650, 900, 1100, 1300];
+const CONFIRM_RETRY_MS = [100, 300, 550, 800, 1000];
+
+/**
+ * 聚焦某字段时，保证 reveal 所指下一项完整露在键盘上方。
+ * 邮箱→激活码，激活码→登录密码，登录密码→确认密码，确认密码→激活按钮
+ */
+const FIELD_SCROLL = {
+  email: { reveal: 'code' as const, revealMargin: 56, paddingMin: 200, paddingRatio: 0.55 },
+  code: { reveal: 'password' as const, revealMargin: 96, paddingMin: 280, paddingRatio: 0.68 },
+  password: { reveal: 'confirm' as const, revealMargin: 112, paddingMin: 300, paddingRatio: 0.72 },
+  confirm: { reveal: 'submit' as const, revealMargin: 80, paddingMin: 280, paddingRatio: 0.85 },
+};
+
 export default function ActivateScreen() {
   const { t } = useTranslation();
   const { activateAccount, language, sendActivationCode, session, setLanguage } = useAuth();
@@ -29,6 +45,7 @@ export default function ActivateScreen() {
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,15 +54,100 @@ export default function ActivateScreen() {
   const emailWrapRef = useRef<View>(null);
   const codeWrapRef = useRef<View>(null);
   const passwordWrapRef = useRef<View>(null);
+  const confirmPasswordWrapRef = useRef<View>(null);
+  const submitBtnWrapRef = useRef<View>(null);
+  const [focusedField, setFocusedField] = useState<FocusedField>('none');
+
+  const revealRefs = {
+    code: codeWrapRef,
+    password: passwordWrapRef,
+    confirm: confirmPasswordWrapRef,
+    submit: submitBtnWrapRef,
+  };
 
   const {
     scrollRef,
     contentRef,
     scrollYRef,
+    keyboardOpen,
     keyboardHeight,
-    onFieldFocus,
+    onScrollViewLayout,
+    scrollEnsureVisible,
+    setRevealTarget,
+    scrollToEnd,
     scrollContentPaddingBottom,
-  } = useScrollInputAboveKeyboard({ topChrome: 44 });
+  } = useScrollInputAboveKeyboard({ bottomGap: 44, extraScroll: 0 });
+
+  const scrollForField = (field: Exclude<FocusedField, 'none'>) => {
+    const cfg = FIELD_SCROLL[field];
+    const revealRef = revealRefs[cfg.reveal];
+    const revealMargin = cfg.revealMargin;
+
+    setRevealTarget(revealRef, revealMargin);
+
+    const margins =
+      field === 'password'
+        ? [revealMargin, revealMargin + 48, revealMargin + 80]
+        : [revealMargin, revealMargin + 28, revealMargin + 48];
+
+    const run = () => {
+      margins.forEach((m) => scrollEnsureVisible(revealRef, m));
+    };
+    run();
+
+    const delays = field === 'confirm' ? CONFIRM_RETRY_MS : REVEAL_RETRY_MS;
+    delays.forEach((ms) => {
+      setTimeout(() => {
+        run();
+        if (field === 'confirm') {
+          scrollToEnd(true);
+        }
+      }, ms);
+    });
+  };
+
+  const focusEmail = () => {
+    setFocusedField('email');
+    requestAnimationFrame(() => scrollForField('email'));
+  };
+
+  const focusCode = () => {
+    setFocusedField('code');
+    requestAnimationFrame(() => scrollForField('code'));
+  };
+
+  const focusPassword = () => {
+    setFocusedField('password');
+    requestAnimationFrame(() => scrollForField('password'));
+  };
+
+  const focusConfirmPassword = () => {
+    setFocusedField('confirm');
+    requestAnimationFrame(() => scrollForField('confirm'));
+  };
+
+  const keyboardExtraPadding =
+    focusedField !== 'none' && keyboardHeight > 0
+      ? Math.max(FIELD_SCROLL[focusedField].paddingMin, keyboardHeight * FIELD_SCROLL[focusedField].paddingRatio)
+      : 0;
+
+  useEffect(() => {
+    if (!keyboardOpen) {
+      setFocusedField('none');
+    }
+  }, [keyboardOpen]);
+
+  useLayoutEffect(() => {
+    if (focusedField === 'none' || keyboardHeight <= 0) return;
+    scrollForField(focusedField);
+  }, [focusedField, keyboardHeight, keyboardExtraPadding]);
+
+  useEffect(() => {
+    if (focusedField === 'none' || keyboardHeight <= 0) return;
+    const delays = focusedField === 'confirm' ? CONFIRM_RETRY_MS : REVEAL_RETRY_MS;
+    const timers = delays.map((ms) => setTimeout(() => scrollForField(focusedField), ms));
+    return () => timers.forEach(clearTimeout);
+  }, [focusedField, keyboardHeight, keyboardExtraPadding]);
 
   useEffect(() => {
     const raw = params.email;
@@ -99,9 +201,19 @@ export default function ActivateScreen() {
   };
 
   const onSubmit = async () => {
-    setBusy(true);
     setError(null);
     setInfo(null);
+
+    if (password.length < 8) {
+      setError(t('activateErrorPassword'));
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError(t('activateErrorPasswordMismatch'));
+      return;
+    }
+
+    setBusy(true);
     const res = await activateAccount(email, code, password);
     setBusy(false);
     if (!res.ok) {
@@ -148,6 +260,7 @@ export default function ActivateScreen() {
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        enabled={Platform.OS === 'ios'}
         style={styles.flex}
       >
         <ScrollView
@@ -155,27 +268,32 @@ export default function ActivateScreen() {
           automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           contentContainerStyle={[
             styles.scrollContent,
-            keyboardHeight > 0 && styles.scrollContentKeyboardOpen,
-            { paddingBottom: scrollContentPaddingBottom },
+            keyboardOpen && styles.scrollContentKeyboardOpen,
+            {
+              paddingBottom: scrollContentPaddingBottom + keyboardExtraPadding,
+            },
           ]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          onLayout={onScrollViewLayout}
           onScroll={(e) => {
             scrollYRef.current = e.nativeEvent.contentOffset.y;
           }}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
+          style={styles.flex}
         >
           <View ref={contentRef} collapsable={false} style={styles.page}>
             <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <BrandLogo size={56} style={styles.brandLogo} />
-                <Text style={styles.brand}>{t('brand')}</Text>
+              <View style={[styles.cardHeader, keyboardOpen && styles.cardHeaderCompact]}>
+                {!keyboardOpen ? <BrandLogo size={56} style={styles.brandLogo} /> : null}
+                {!keyboardOpen ? <Text style={styles.brand}>{t('brand')}</Text> : null}
                 <Text style={styles.cardSubtitle}>{t('activateTitle')}</Text>
-                <Text style={styles.cardHint}>{t('activateSubtitle')}</Text>
+                {!keyboardOpen ? <Text style={styles.cardHint}>{t('activateSubtitle')}</Text> : null}
               </View>
 
-              <View style={styles.divider} />
+              {!keyboardOpen ? <View style={styles.divider} /> : null}
 
               <View ref={emailWrapRef} collapsable={false} style={styles.field}>
                 <Text style={styles.label}>{t('account')}</Text>
@@ -184,7 +302,7 @@ export default function ActivateScreen() {
                   autoCorrect={false}
                   keyboardType="email-address"
                   onChangeText={setEmail}
-                  onFocus={() => onFieldFocus(emailWrapRef)}
+                  onFocus={focusEmail}
                   placeholder={t('accountHint')}
                   placeholderTextColor={colors.textMuted}
                   style={styles.input}
@@ -217,7 +335,7 @@ export default function ActivateScreen() {
                   keyboardType="number-pad"
                   maxLength={4}
                   onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 4))}
-                  onFocus={() => onFieldFocus(codeWrapRef)}
+                  onFocus={focusCode}
                   placeholder={t('activateCodeHint')}
                   placeholderTextColor={colors.textMuted}
                   style={styles.input}
@@ -230,7 +348,7 @@ export default function ActivateScreen() {
                 <Text style={styles.label}>{t('activatePassword')}</Text>
                 <TextInput
                   onChangeText={setPassword}
-                  onFocus={() => onFieldFocus(passwordWrapRef)}
+                  onFocus={focusPassword}
                   placeholder={t('activatePasswordHint')}
                   placeholderTextColor={colors.textMuted}
                   secureTextEntry
@@ -240,26 +358,50 @@ export default function ActivateScreen() {
                 />
               </View>
 
+              <View ref={confirmPasswordWrapRef} collapsable={false} style={styles.field}>
+                <Text style={styles.label}>{t('activateConfirmPassword')}</Text>
+                <TextInput
+                  onChangeText={setConfirmPassword}
+                  onFocus={focusConfirmPassword}
+                  onSubmitEditing={() => void onSubmit()}
+                  placeholder={t('activateConfirmPasswordHint')}
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="done"
+                  secureTextEntry
+                  style={styles.input}
+                  textContentType="newPassword"
+                  value={confirmPassword}
+                />
+              </View>
+
               {info ? <Text style={styles.info}>{info}</Text> : null}
               {error ? <Text style={styles.error}>{error}</Text> : null}
 
-              <Pressable
-                disabled={busy}
-                onPress={() => void onSubmit()}
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  pressed && styles.primaryPressed,
-                  busy && styles.disabled,
-                ]}
+              <View
+                ref={submitBtnWrapRef}
+                collapsable={false}
+                style={focusedField === 'confirm' ? styles.submitWrapFocused : undefined}
               >
-                <Text style={styles.primaryLabel}>{busy ? '…' : t('activateSubmit')}</Text>
-              </Pressable>
-
-              <View style={styles.cardFooter}>
-                <Link href="/login">
-                  <Text style={styles.linkText}>{t('activateBackToLogin')}</Text>
-                </Link>
+                <Pressable
+                  disabled={busy}
+                  onPress={() => void onSubmit()}
+                  style={({ pressed }) => [
+                    styles.primaryBtn,
+                    pressed && styles.primaryPressed,
+                    busy && styles.disabled,
+                  ]}
+                >
+                  <Text style={styles.primaryLabel}>{busy ? '…' : t('activateSubmit')}</Text>
+                </Pressable>
               </View>
+
+              {!keyboardOpen ? (
+                <View style={styles.cardFooter}>
+                  <Link href="/login">
+                    <Text style={styles.linkText}>{t('activateBackToLogin')}</Text>
+                  </Link>
+                </View>
+              ) : null}
             </View>
           </View>
         </ScrollView>
@@ -307,7 +449,7 @@ const styles = StyleSheet.create({
   },
   scrollContentKeyboardOpen: {
     justifyContent: 'flex-start',
-    paddingTop: 12,
+    paddingTop: 8,
   },
   page: {
     width: '100%',
@@ -327,6 +469,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardHeader: { alignItems: 'center', marginBottom: 4 },
+  cardHeaderCompact: { marginBottom: 0, paddingTop: 4 },
   brandLogo: {
     marginBottom: 10,
   },
@@ -365,6 +508,7 @@ const styles = StyleSheet.create({
   secondaryLabel: { color: colors.primaryDark, fontSize: 15, fontWeight: '600' },
   info: { color: colors.success, marginTop: 4, marginBottom: 4, fontSize: 13 },
   error: { color: colors.danger, marginTop: 4, marginBottom: 4, fontSize: 13 },
+  submitWrapFocused: { paddingBottom: 16, marginBottom: 4 },
   primaryBtn: {
     marginTop: 8,
     backgroundColor: colors.primary,

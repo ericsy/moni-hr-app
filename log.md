@@ -2,7 +2,11 @@
 
 ## 2026-06-29
 
-- **激活页 Android 键盘遮挡**：**`app/(auth)/activate.tsx`** 接入 **`useScrollInputAboveKeyboard`**（与登录/忘记密码页一致），聚焦验证码/密码时自动上滚，避免输入框被键盘盖住。
+- **master 清理外勤残留**：删除工作区未提交的派单/外勤相关文件（`today.tsx`、`todayWork.ts`、`fieldService` 等）；**master 不含外勤功能**，外勤开发在 **`send_task`** 等分支。此前 `today.tsx` 引用缺失模块导致打包报错。
+
+- **激活页密码二次确认**：设置登录密码时增加「确认密码」输入框，提交前校验两次密码一致（至少 8 位规则不变）。
+
+- **Android 16 键盘滚动**：`scrollEnsureVisible` 区分 resize（用 ScrollView 实测高度）与 overlay（用 keyboard screenY），取更保守值；登录/忘记密码页仍走原 `onFieldFocus` 逻辑不受影响。
 
 - **App 登录分步流程**：登录页先输入邮箱点「下一步」，调用 **`POST /api/v1/app/auth/lookup`** 预检；不存在提示账号不存在，未激活跳转激活页，已激活再显示密码框。移除登录页「账户激活」入口。
 

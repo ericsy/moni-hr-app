@@ -41,8 +41,9 @@ export default function LoginScreen() {
     scrollYRef,
     keyboardHeight,
     onFieldFocus,
+    onScrollViewLayout,
     scrollContentPaddingBottom,
-  } = useScrollInputAboveKeyboard({ topChrome: 44 });
+  } = useScrollInputAboveKeyboard({ bottomGap: 32 });
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +156,7 @@ export default function LoginScreen() {
           ]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          onLayout={onScrollViewLayout}
           onScroll={(e) => {
             scrollYRef.current = e.nativeEvent.contentOffset.y;
           }}
