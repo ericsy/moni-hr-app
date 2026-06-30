@@ -342,3 +342,4 @@
 
 - 服务端（moni-hr）：外勤同步店班不再在派单时写入 `linkedStoreShiftId`（`published_cell.id` 每次重发布会变）；打卡/汇总时按外勤与店班**时段重叠**动态匹配当前排班 cell，再写入店班打卡记录；派单仍保留 `syncStoreClockIn/Out` 开关与时间对齐校验（R1/R2）。
 - 商家端（moni-hr-merchant）：派单/新建编辑外勤工单时支持勾选「同步店班上班/下班」；按员工店班与外勤时段重叠预览并校验；改派保留已有同步配置。
+- **修复 send_task 分支 Android 打包失败**：`schedule.tsx` / `schedule-week.tsx` 已引用外勤组件与工具，但 `FieldJobRow.tsx`、`fieldJobsSchedule.ts`、`workPunch.ts` 未纳入 git 导致 Metro 无法解析；从历史会话恢复三份文件，并补全 `fetchWorkSummariesByDates`（周排班打卡 Hero 依赖完整 `TodayWorkSummary`）。
