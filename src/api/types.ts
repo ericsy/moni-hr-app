@@ -193,6 +193,11 @@ export type AppAttendanceRequestCreate = {
   reason: string;
   leaveItems?: AppAttendanceLeaveItemRequest[];
   publishedCellId?: number;
+  fieldJobId?: number | null;
+  linkedStoreShiftId?: number | null;
+  syncStoreClockIn?: boolean | null;
+  syncStoreClockOut?: boolean | null;
+  serviceAddress?: string | null;
   punchType?: 'clock_in' | 'clock_out';
   actualPunchedAt?: string;
   overnightPairCellId?: number;
@@ -244,6 +249,11 @@ export type AppAttendanceRequest = {
   reviewedAt?: string | null;
   reviewComment?: string | null;
   publishedCellId?: number | null;
+  fieldJobId?: number | null;
+  linkedStoreShiftId?: number | null;
+  syncStoreClockIn?: boolean | null;
+  syncStoreClockOut?: boolean | null;
+  serviceAddress?: string | null;
   punchType?: string | null;
   actualPunchedAt?: string | null;
   /** 漏打卡：关联 publishedCellId 的排班日期 */
@@ -251,6 +261,7 @@ export type AppAttendanceRequest = {
   /** 漏打卡：班次开始/结束 HH:mm */
   shiftStartTime?: string | null;
   shiftEndTime?: string | null;
+  areaName?: string | null;
   applicantMerchantAdminId?: number;
   applicantName?: string;
   leaveItems?: AppAttendanceLeaveItem[];

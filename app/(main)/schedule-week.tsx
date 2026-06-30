@@ -29,7 +29,6 @@ import {
 import { fetchMyPublishedSchedule, fetchStorePublishedSchedule } from '../../src/api/schedule';
 import { FieldJobRow } from '../../src/components/FieldJobRow';
 import { MyShiftCard } from '../../src/components/MyShiftCard';
-import { SchedulePunchHeroCard } from '../../src/components/SchedulePunchHeroCard';
 import { getActiveStore, useAuth } from '../../src/context/AuthContext';
 import {
   getShiftLeaveRequestStatus,
@@ -47,14 +46,9 @@ import { colors } from '../../src/theme/colors';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
-import { pickHeroShiftIndex } from '../../src/utils/scheduleHeroShift';
 import { fetchWorkSummariesByDates, resolveFieldJobsForSchedule } from '../../src/utils/fieldJobsSchedule';
 import type { TimelineFieldJobItem, TodayWorkSummary } from '../../src/types/fieldService';
-import {
-  executeWorkPunch,
-  isWorkPunchActionEnabled,
-  workPunchMatchesStoreShift,
-} from '../../src/utils/workPunch';
+import { executeWorkPunch, workPunchMatchesStoreShift } from '../../src/utils/workPunch';
 import { canViewStoreRoster } from '../../src/utils/storeManagement';
 import {
   formatSelectedHeaderLine,
@@ -345,9 +339,6 @@ export default function ScheduleWeekScreen() {
     standalone: selectedFieldResolved.standaloneFieldJobs,
   };
   const selectedFieldJobCount = selectedFieldResolved.allFieldJobs.length;
-  const selectedWorkSummary = workSummariesByDate[selected];
-  const workAction = selectedWorkSummary?.currentPunchAction;
-  const isTodaySelected = selected === todayIso;
   const getPairPunchForSlot = useCallback(
     (slot: MyPublishedShiftSlot) => {
       if (slot.overnightRole === 'end' && slot.overnightPairCellId) {
@@ -357,25 +348,6 @@ export default function ScheduleWeekScreen() {
     },
     [shiftPunches],
   );
-  const heroIndex = useMemo(() => {
-    if (!isTodaySelected) return -1;
-    return pickHeroShiftIndex(
-      myShifts,
-      selected,
-      todayIso,
-      (s) => getShiftPunch(selected, s),
-      getPairPunchForSlot,
-      punchesKnown,
-    );
-  }, [isTodaySelected, myShifts, selected, todayIso, getShiftPunch, getPairPunchForSlot, punchesKnown, shiftPunches]);
-  const heroSlot = heroIndex >= 0 ? myShifts[heroIndex] : undefined;
-  const showHeroCard =
-    isTodaySelected &&
-    mode === 'my' &&
-    (!!heroSlot ||
-      isWorkPunchActionEnabled(workAction) ||
-      workAction?.action === 'WAITING' ||
-      workAction?.action === 'DONE');
   const storeDayRoster = useMemo(
     () => storeRosterByDate[selected] ?? [],
     [selected, storeRosterByDate],
@@ -482,58 +454,6 @@ export default function ScheduleWeekScreen() {
     },
     [workSummariesByDate, selected, todayIso, selectedStoreId, loadDayPunches, punchShift, t],
   );
-
-  const onHeroPunch = useCallback(async () => {
-    const action = workSummariesByDate[selected]?.currentPunchAction;
-    if (isWorkPunchActionEnabled(action) && action && selectedStoreId) {
-      setPunchBusyId('work');
-      try {
-        const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
-        setWorkSummariesByDate((prev) => ({ ...prev, [selected]: summary }));
-        setFieldTimelineByDate((prev) => ({ ...prev, [selected]: summary.timeline }));
-        await loadDayPunches();
-        Alert.alert(t('tabSchedule'), t('punchSuccess'));
-      } catch (e) {
-        if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
-          Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
-          return;
-        }
-        const message = e instanceof ApiError ? e.message : t('punchFailed');
-        Alert.alert(t('tabSchedule'), message);
-      } finally {
-        setPunchBusyId(null);
-      }
-      return;
-    }
-    if (heroSlot) {
-      const punch = getShiftPunch(selected, heroSlot);
-      const pairPunch = getPairPunchForSlot(heroSlot);
-      const actions = getShiftCardActions(
-        selected,
-        heroSlot.range,
-        punch,
-        todayIso,
-        getApproximateServerNowDate(),
-        punchesKnown,
-        heroSlot.overnightRole ?? 'normal',
-        pairPunch,
-      );
-      const kind = actions.showClockOut ? 'out' : 'in';
-      await runPunch(heroSlot.id, kind);
-    }
-  }, [
-    workSummariesByDate,
-    selected,
-    selectedStoreId,
-    loadDayPunches,
-    t,
-    heroSlot,
-    getShiftPunch,
-    getPairPunchForSlot,
-    todayIso,
-    punchesKnown,
-    runPunch,
-  ]);
 
   return (
     <>
@@ -652,21 +572,6 @@ export default function ScheduleWeekScreen() {
         </View>
 
         {mode === 'store' && canSeeStore ? <StoreRosterLegendBar t={t} /> : null}
-
-        {showHeroCard ? (
-          <SchedulePunchHeroCard
-            key={heroSlot?.id ?? 'work-hero'}
-            slot={heroSlot}
-            workDateIso={selected}
-            todayIso={todayIso}
-            punch={heroSlot ? getShiftPunch(selected, heroSlot) : undefined}
-            pairPunch={heroSlot ? getPairPunchForSlot(heroSlot) : undefined}
-            punchesKnown={punchesKnown}
-            punchBusy={punchBusyId === 'work' || (heroSlot ? punchBusyId === heroSlot.id : false)}
-            workAction={workAction}
-            onPunch={onHeroPunch}
-          />
-        ) : null}
 
       <View style={styles.panel}>
         {mode === 'store' ? (
@@ -1069,7 +974,7 @@ const styles = StyleSheet.create({
   list: { gap: 12, paddingBottom: 24 },
   shiftGroup: { gap: 8 },
   fieldJobsSection: { gap: 10, marginTop: 4 },
-  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: '#7C3AED', marginTop: 4 },
+  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 4 },
   storeDayView: { gap: 14 },
   storeRegionCard: {
     borderRadius: 16,

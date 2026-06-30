@@ -323,7 +323,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 6,
     borderRadius: 12,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.store,
   },
   sideBtnPrimaryText: {
     fontSize: 11,

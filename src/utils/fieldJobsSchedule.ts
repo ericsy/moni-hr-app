@@ -11,6 +11,11 @@ export function extractFieldJobs(timeline: TodayWorkTimelineItem[]): TimelineFie
   return timeline.filter((item): item is TimelineFieldJobItem => item.type === 'field_job');
 }
 
+/** 已打外勤上班、尚未完成下班的外勤任务（服务进行中） */
+export function findActiveFieldJob(timeline: TodayWorkTimelineItem[]): TimelineFieldJobItem | undefined {
+  return extractFieldJobs(timeline).find((job) => !!job.fieldClockInAt && !job.fieldClockOutAt);
+}
+
 function jobKey(job: TimelineFieldJobItem): string {
   return job.id || `${job.start}|${job.end}|${job.customerName}`;
 }

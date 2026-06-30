@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
-import type { CurrentPunchAction } from '../types/fieldService';
+import type { CurrentPunchAction, TimelineFieldJobItem } from '../types/fieldService';
 import { colors } from '../theme/colors';
 import { formatPunchHm } from '../utils/formatPunchTime';
 import { getApproximateServerNowDate } from '../utils/serverClock';
@@ -17,6 +17,13 @@ import { getShiftCardActions } from '../utils/shiftClockWindow';
 import { isFieldWorkPunchAction, isWorkPunchActionEnabled, workPunchTitleKey } from '../utils/workPunch';
 
 type HeroDisplayMode = 'clock_in' | 'clock_out' | 'clocked_in' | 'completed' | 'idle';
+
+function formatFieldJobHm(value: string, language: string): string {
+  if (!value) return '--:--';
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(value)) return value.slice(0, 5);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return formatPunchHm(value, language);
+  return value;
+}
 
 function resolveClockInIso(
   punch: ShiftPunchRecord | undefined,
@@ -57,6 +64,7 @@ type Props = {
   punchesKnown?: boolean;
   punchBusy?: boolean;
   workAction?: CurrentPunchAction;
+  activeFieldJob?: TimelineFieldJobItem;
   onPunch: () => void | Promise<void>;
 };
 
@@ -69,6 +77,7 @@ export function SchedulePunchHeroCard({
   punchesKnown = false,
   punchBusy,
   workAction,
+  activeFieldJob,
   onPunch,
 }: Props) {
   const { t, i18n } = useTranslation();
@@ -114,11 +123,39 @@ export function SchedulePunchHeroCard({
     );
   }
 
+  if (workWaiting && activeFieldJob) {
+    const startedAt = formatFieldJobHm(activeFieldJob.fieldClockInAt ?? '', i18n.language);
+    const completeAfter = formatFieldJobHm(activeFieldJob.end, i18n.language);
+    const customer = activeFieldJob.customerName?.trim();
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <Ionicons color="#fff" name="car-outline" size={28} />
+          </View>
+          <Text style={styles.title}>{t('fieldServiceHeroInProgress')}</Text>
+          {customer ? <Text style={styles.subtitle}>{customer}</Text> : null}
+          <Text style={styles.subtitle}>
+            {t('fieldServiceHeroInProgressHint', { time: startedAt, end: completeAfter })}
+          </Text>
+        </View>
+        <View style={styles.punchBtn}>
+          <View style={[styles.punchCircle, styles.punchCircleInService]}>
+            <Ionicons color="#B45309" name="time-outline" size={36} />
+          </View>
+          <Text style={styles.punchBtnText}>{t('fieldServiceHeroInProgress')}</Text>
+        </View>
+      </View>
+    );
+  }
+
   if ((workWaiting || workDone) && workAction) {
-    const title =
-      workAction.buttonLabel ||
-      (workDone ? t('todayActionDone') : t('todayActionWaiting'));
-    const subtitle = workAction.hint ?? '';
+    const title = workDone
+      ? workAction.buttonLabel || t('todayActionDone')
+      : workAction.hint || workAction.buttonLabel || t('todayActionWaiting');
+    const subtitle =
+      workDone || !workAction.hint || workAction.hint === title ? '' : workAction.hint;
 
     return (
       <View style={styles.card}>
@@ -285,5 +322,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   punchCircleDone: { backgroundColor: '#fff' },
+  punchCircleInService: { backgroundColor: '#FEF3C7' },
   punchBtnText: { marginTop: 6, fontSize: 12, fontWeight: '700', color: '#fff', textAlign: 'center' },
 });

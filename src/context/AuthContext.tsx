@@ -176,6 +176,15 @@ export type LeaveRequest = {
     punchKind: 'in' | 'out';
     proposedTime: string;
   };
+  /** 外勤漏打卡关联工单 */
+  fieldJob?: {
+    id: string;
+    customerName: string;
+    serviceAddress?: string;
+    scheduledRange: string;
+    syncStoreClockIn: boolean;
+    syncStoreClockOut: boolean;
+  };
 };
 
 type Session = {

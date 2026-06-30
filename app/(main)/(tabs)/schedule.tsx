@@ -42,10 +42,15 @@ import {
 import { openShiftRequest } from '../../../src/utils/openShiftRequest';
 import { countPendingApprovals, shouldSplitRequestViews } from '../../../src/utils/requestApproval';
 import { pickHeroShiftIndex } from '../../../src/utils/scheduleHeroShift';
-import { canApplyMissedPunchForShift, getShiftCardActions } from '../../../src/utils/shiftClockWindow';
+import {
+  canApplyMissedPunchKind,
+  canApplyMissedPunchForShift,
+  getShiftCardActions,
+} from '../../../src/utils/shiftClockWindow';
+import { shouldHideStoreMissedPunchApply } from '../../../src/utils/fieldMissedPunchEligibility';
 import { doesPunchCoverScheduledShift } from '../../../src/utils/shiftLeaveEligibility';
 import { getApproximateServerNowDate } from '../../../src/utils/serverClock';
-import { resolveFieldJobsForSchedule } from '../../../src/utils/fieldJobsSchedule';
+import { findActiveFieldJob, resolveFieldJobsForSchedule } from '../../../src/utils/fieldJobsSchedule';
 import type { TimelineFieldJobItem, TodayWorkSummary, TodayWorkTimelineItem } from '../../../src/types/fieldService';
 import {
   executeWorkPunch,
@@ -223,6 +228,7 @@ export default function ScheduleScreen() {
 
   const heroSlot = heroIndex >= 0 ? todayShifts[heroIndex] : undefined;
   const workAction = workSummary?.currentPunchAction;
+  const activeFieldJob = useMemo(() => findActiveFieldJob(fieldTimeline), [fieldTimeline]);
   const showHeroCard =
     !!heroSlot ||
     isWorkPunchActionEnabled(workAction) ||
@@ -432,6 +438,7 @@ export default function ScheduleScreen() {
             punchesKnown={punchesKnown}
             punchBusy={punchBusyId === 'work' || (heroSlot ? punchBusyId === heroSlot.id : false)}
             workAction={workAction}
+            activeFieldJob={activeFieldJob}
             onPunch={onHeroPunch}
           />
         ) : null}
@@ -476,10 +483,44 @@ export default function ScheduleScreen() {
                   s.overnightRole ?? 'normal',
                   pairPunch,
                 );
+                const linkedFieldJobs = fieldJobsByShiftId[s.id] ?? [];
+                const canStoreMissedIn =
+                  punchesKnown &&
+                  !punch?.clockInAt &&
+                  canApplyMissedPunchKind(
+                    shiftWorkDate,
+                    s.range,
+                    punch,
+                    todayIso,
+                    'in',
+                    getApproximateServerNowDate(),
+                    s.overnightRole ?? 'normal',
+                    pairPunch,
+                  );
+                const canStoreMissedOut =
+                  punchesKnown &&
+                  !punch?.clockOutAt &&
+                  canApplyMissedPunchKind(
+                    shiftWorkDate,
+                    s.range,
+                    punch,
+                    todayIso,
+                    'out',
+                    getApproximateServerNowDate(),
+                    s.overnightRole ?? 'normal',
+                    pairPunch,
+                  );
+                const hideStoreMissedByFieldSync = shouldHideStoreMissedPunchApply(
+                  linkedFieldJobs,
+                  punch,
+                  canStoreMissedIn,
+                  canStoreMissedOut,
+                );
                 const missedPunchApplyBlocked =
                   missedPunchPendingStatus === 'full' ||
                   missedPunchBlockedByLeave ||
-                  missedPunchTooEarly;
+                  missedPunchTooEarly ||
+                  hideStoreMissedByFieldSync;
                 const leaveApplyBlocked =
                   leavePending ||
                   s.isSubstitution === true ||
@@ -526,7 +567,13 @@ export default function ScheduleScreen() {
                       }}
                     />
                     {(fieldJobsByShiftId[s.id] ?? []).map((job) => (
-                      <FieldJobRow key={job.id || `${s.id}-field-${job.start}`} job={job} nested />
+                      <FieldJobRow
+                        key={job.id || `${s.id}-field-${job.start}`}
+                        job={job}
+                        nested
+                        workDateIso={todayIso}
+                        attendanceRequests={myAttendanceRequests}
+                      />
                     ))}
                   </View>
                 );
@@ -537,7 +584,12 @@ export default function ScheduleScreen() {
                     <Text style={styles.fieldJobsSectionTitle}>{t('scheduleFieldJobsTitle')}</Text>
                   ) : null}
                   {standaloneFieldJobs.map((job) => (
-                    <FieldJobRow key={job.id || `standalone-${job.start}`} job={job} />
+                    <FieldJobRow
+                      key={job.id || `standalone-${job.start}`}
+                      job={job}
+                      workDateIso={todayIso}
+                      attendanceRequests={myAttendanceRequests}
+                    />
                   ))}
                 </View>
               ) : null}
@@ -675,7 +727,7 @@ const styles = StyleSheet.create({
   todayPanelBar: { width: 4, height: 18, borderRadius: 2, backgroundColor: colors.primary },
   todayPanelTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
   fieldJobsSection: { gap: 10, marginTop: 4 },
-  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: '#7C3AED', marginTop: 4 },
+  fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 4 },
   todayList: { gap: 10 },
   shiftGroup: { gap: 0 },
   todayEmpty: { paddingVertical: 24, alignItems: 'center' },

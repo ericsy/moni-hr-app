@@ -37,7 +37,6 @@ export default function MainLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="today" options={{ headerShown: true }} />
       <Stack.Screen name="requests" options={{ headerShown: true }} />
       <Stack.Screen name="request-create" options={{ headerShown: true }} />
       <Stack.Screen name="date-leave-create" options={{ headerShown: true }} />

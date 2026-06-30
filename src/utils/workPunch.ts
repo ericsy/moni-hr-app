@@ -2,7 +2,7 @@ import * as Location from 'expo-location';
 
 import { postWorkPunch } from '../api/todayWork';
 import type { CurrentPunchAction, EmployeePunchPayload, TodayWorkSummary } from '../types/fieldService';
-import { getPunchDeviceId } from './punchDevice';
+import { getPunchDevicePayload } from './punchDevice';
 
 export function mapActionToPunchType(
   action: CurrentPunchAction['action'],
@@ -66,6 +66,7 @@ export async function executeWorkPunch(params: {
   }
 
   const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+  const { deviceType, deviceId } = getPunchDevicePayload();
   return postWorkPunch({
     storeId: params.storeId,
     payload: {
@@ -74,7 +75,8 @@ export async function executeWorkPunch(params: {
       punchType,
       latitude: loc.coords.latitude,
       longitude: loc.coords.longitude,
-      deviceId: getPunchDeviceId(),
+      deviceType,
+      deviceId,
     },
   });
 }

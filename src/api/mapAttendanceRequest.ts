@@ -78,6 +78,7 @@ function mapLeaveItemToBinding(item: AppAttendanceLeaveItem, index: number): Req
 }
 
 function mapMissedPunchBinding(row: AppAttendanceRequest): RequestShiftBinding | null {
+  if (row.fieldJobId != null) return null;
   if (row.publishedCellId == null) return null;
   const workDate =
     scheduleDateKeyFrom(row.scheduleDate) ||
@@ -112,6 +113,19 @@ function mapMissedPunchBinding(row: AppAttendanceRequest): RequestShiftBinding |
     areaName: '—',
     shiftName: '—',
     scheduledRange: range,
+  };
+}
+
+function mapFieldMissedPunchMeta(row: AppAttendanceRequest): LeaveRequest['fieldJob'] | undefined {
+  if (row.fieldJobId == null) return undefined;
+  const scheduledRange = formatShiftRangeTimes(row.shiftStartTime, row.shiftEndTime);
+  return {
+    id: String(row.fieldJobId),
+    customerName: (row.areaName ?? '').trim() || '—',
+    serviceAddress: row.serviceAddress?.trim() || undefined,
+    scheduledRange: scheduledRange !== '—' ? scheduledRange : '—',
+    syncStoreClockIn: row.syncStoreClockIn === true,
+    syncStoreClockOut: row.syncStoreClockOut === true,
   };
 }
 
@@ -243,7 +257,9 @@ export function mapAttendanceRequestToLeaveRequest(
           return binding ? [binding] : [];
         })();
 
-  const missedWorkDate = shifts[0]?.workDate ?? '';
+  const fieldJob = type === 'missed_punch' ? mapFieldMissedPunchMeta(row) : undefined;
+  const missedWorkDate =
+    shifts[0]?.workDate || scheduleDateKeyFrom(row.scheduleDate) || '';
   const span =
     type === 'leave' && leaveMode === 'date_range' && row.leaveDateFrom && row.leaveDateTo
       ? { start: String(row.leaveDateFrom).slice(0, 10), end: String(row.leaveDateTo).slice(0, 10) }
@@ -273,6 +289,7 @@ export function mapAttendanceRequestToLeaveRequest(
       type === 'missed_punch' && proposedTime
         ? { punchKind, proposedTime }
         : undefined,
+    fieldJob,
   };
 }
 
@@ -338,6 +355,15 @@ export type SubmitAttendanceInput =
       shift: RequestShiftBinding;
       punchKind: 'in' | 'out';
       proposedTime: string;
+    }
+  | {
+      type: 'missed_punch';
+      source: 'field';
+      reason: string;
+      workDate: string;
+      fieldJobId: string;
+      punchKind: 'in' | 'out';
+      proposedTime: string;
     };
 
 export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAttendanceRequestCreate {
@@ -360,6 +386,18 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
         leaveTimesByScheduleKey: input.leaveTimesByScheduleKey,
       }),
     };
+  }
+  if (input.type === 'missed_punch' && 'source' in input && input.source === 'field') {
+    return {
+      requestType: 'missed_punch',
+      reason: normalizeSubmitReason(input.reason),
+      fieldJobId: Number(input.fieldJobId),
+      punchType: input.punchKind === 'out' ? 'clock_out' : 'clock_in',
+      actualPunchedAt: toAttendanceDateTimeIso(input.workDate, input.proposedTime),
+    };
+  }
+  if (input.type !== 'missed_punch') {
+    throw new Error('Invalid attendance request input');
   }
   const shift = input.shift;
   const overnightPairCellId =

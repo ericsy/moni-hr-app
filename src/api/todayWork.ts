@@ -26,6 +26,7 @@ export async function postWorkPunch(params: {
       punchType: params.payload.punchType,
       latitude: params.payload.latitude,
       longitude: params.payload.longitude,
+      deviceType: params.payload.deviceType,
       deviceId: params.payload.deviceId,
     },
   });

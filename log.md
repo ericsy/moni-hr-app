@@ -2,6 +2,19 @@
 
 ## 2026-06-29
 
+- **外勤漏打卡 · 商家端 Web（moni-hr-merchant）**：
+  - 申请列表/详情支持外勤漏打卡展示（客户、服务地址、计划时段、同步店班说明）；与 App 共用后端 `fieldJobId` + `missed_punch` 体系。
+
+- **外勤漏打卡（与店班漏打卡同一申请体系）**：
+  - 新增 **`src/utils/fieldMissedPunchEligibility.ts`**、**`src/utils/openFieldRequest.ts`**：外勤可申请时机、打卡不完整状态、店班漏打卡入口按同步方向隐藏。
+  - **`FieldJobRow`**：缺卡显示「打卡不完整/审批中」；可申请时展示「申请漏打卡」；同步店班时提示联动补录。
+  - **`request-create`**：支持 **`source=field`** 外勤漏打卡表单与提交（**`fieldJobId`**）。
+  - **`schedule.tsx`**：外勤行传入申请列表；店班「漏打卡」在应由外勤同步时隐藏。
+  - **`request-detail`** / **`mapAttendanceRequest`**：展示外勤漏打卡客户、时段、同步说明。
+  - i18n 中英文案。
+
+## 2026-06-29
+
 - **排班 Hero 打卡统一店班+外勤**：
   - 新增 **`src/utils/workPunch.ts`**，排班页蓝色 Hero 按钮根据 **`today-work-summary.currentPunchAction`** 自动切换「到店上班/下班」「开始/完成外勤」等动作，统一走 **`POST /api/v1/app/work/punch`**；无工作流动作时仍走原 **`punchShift`** 店班打卡。
   - **`schedule-week.tsx`** 今日视图同步支持 Hero 统一打卡。
@@ -343,3 +356,22 @@
 - 服务端（moni-hr）：外勤同步店班不再在派单时写入 `linkedStoreShiftId`（`published_cell.id` 每次重发布会变）；打卡/汇总时按外勤与店班**时段重叠**动态匹配当前排班 cell，再写入店班打卡记录；派单仍保留 `syncStoreClockIn/Out` 开关与时间对齐校验（R1/R2）。
 - 商家端（moni-hr-merchant）：派单/新建编辑外勤工单时支持勾选「同步店班上班/下班」；按员工店班与外勤时段重叠预览并校验；改派保留已有同步配置。
 - **修复 send_task 分支 Android 打包失败**：`schedule.tsx` / `schedule-week.tsx` 已引用外勤组件与工具，但 `FieldJobRow.tsx`、`fieldJobsSchedule.ts`、`workPunch.ts` 未纳入 git 导致 Metro 无法解析；从历史会话恢复三份文件，并补全 `fetchWorkSummariesByDates`（周排班打卡 Hero 依赖完整 `TodayWorkSummary`）。
+- **周排班移除顶部打卡 Hero**：`schedule-week.tsx` 去掉蓝色 `SchedulePunchHeroCard`；打卡仍保留在当日各班次卡片内，日排班页 Hero 不变。
+- **修复 today 路由警告**：`(main)/_layout.tsx` 注册了不存在的 `today` Stack 页（外勤已并入日排班 `schedule.tsx`），移除该 `Stack.Screen` 声明。
+- **修复外勤打卡 deviceType 为空**：`POST /api/v1/app/work/punch` 请求体补传 `deviceType`（与店班 `clock/punch` 一致，取自 `getPunchDevicePayload()`）。
+- **外勤上班后 Hero 显示「服务中」**：服务端 `WAITING` 表示下一打卡点未到时间；若时间线已有外勤上班记录，蓝色 Hero 改为「服务中」并提示完成打卡时间，不再显示「等待 / 等待外勤任务可打卡时间」。
+- **外勤行时间单行显示**：`FieldJobRow` 状态徽章移到类型标签行右侧，时间行独占整行宽度；用不换行空格连接起止时间，完整显示 `09:00 - 18:00` 且不换行、不截断。
+- **外勤地址完整换行**：`FieldJobRow` 地址去掉 `numberOfLines` 限制，过长时自动换行显示全文。
+- **外勤地址跳转导航**：点击外勤地址（有坐标或有效地址时）打开 Google 地图导航；Android 优先 `google.navigation`，否则回退 Google Maps 网页链接。
+- **外勤客户电话**：`today-work-summary` 时间线返回 `customerPhone`；`FieldJobRow` 展示电话，点击调起系统拨号。
+- **外勤地址/电话点击区域**：字号 14、浅蓝底按钮式行、最小高度 44pt，图标 18，更易点按。
+- **外勤联系信息样式**：地址/电话改为标签+内容操作行（圆角图标、细分隔线、右侧箭头），保留大点击区域。
+- **外勤联系信息与 Logo 对齐**：卡片改为上下结构，联系行 40px 图标列与顶部紫色外勤图标左对齐、间距一致。
+- **外勤客户名紧跟时段**：`FieldJobRow` 第二行改为 `09:00 - 18:00 · 客户名`；无客户名时仅显示时间；状态徽章仍在首行右侧不变。
+- **外勤配色降噪**：紫色改为低饱和灰蓝（`colors.field` / `fieldInk`）；导航/电话操作仍用 App 主色蓝。
+- **外勤统一青绿色系**：车标、导航地址、电话图标均用 `field` / `fieldSoft` 青绿套色；类型标签与分组标题同步。
+- **外勤改浅蓝色系**：`field` `#3B82F6`、`fieldSoft` `#EFF6FF`、`fieldInk` 与主色 `#2563EB` 一致；车标/地址/电话图标统一浅蓝套色。
+- **外勤再调浅蓝 + 标题黑色**：图标色 `#60A5FA`、浅底 `#F0F9FF`；「外勤服务」类型标签与列表分组标题改回 `colors.text` 黑色。
+- **店班 Logo 中间色阶**：新增 `colors.store` `#3B82F6`（Hero `#2563EB` > 店班 > 外勤 `#60A5FA`）；`TodayShiftRow` / `MyShiftCard` 上班钮同步。
+- **外勤联系行去掉标签**：地址/电话行不再显示「服务地址」「客户电话」小字，仅保留图标与内容。
+- **外勤联系行内边距**：地址/电话行补 `paddingLeft`，避免图标与左侧边框重叠。

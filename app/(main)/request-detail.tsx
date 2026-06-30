@@ -457,17 +457,39 @@ export default function RequestDetailScreen() {
                   <View style={styles.row}>
                     <Text style={styles.rowLabel}>{t('requestWorkDate')}</Text>
                     <Text style={styles.rowValue}>
-                      {detail.shifts[0]?.workDate
-                        ? formatPunchHeaderDate(detail.shifts[0].workDate, i18n.language)
+                      {detail.start
+                        ? formatPunchHeaderDate(detail.start, i18n.language)
                         : '—'}
                     </Text>
                   </View>
-                  <View style={styles.row}>
-                    <Text style={styles.rowLabel}>{t('requestShiftSegment')}</Text>
-                    <Text style={styles.rowValue}>
-                      {detail.shifts[0] ? formatShiftBindingLine(detail.shifts[0]) : '—'}
-                    </Text>
-                  </View>
+                  {detail.fieldJob ? (
+                    <>
+                      <View style={styles.row}>
+                        <Text style={styles.rowLabel}>{t('fieldJobMissedPunchTarget')}</Text>
+                        <Text style={styles.rowValue}>{detail.fieldJob.customerName}</Text>
+                      </View>
+                      <View style={styles.row}>
+                        <Text style={styles.rowLabel}>{t('missedPunchShift')}</Text>
+                        <Text style={styles.rowValue}>{detail.fieldJob.scheduledRange}</Text>
+                      </View>
+                      {detail.fieldJob.serviceAddress ? (
+                        <View style={styles.row}>
+                          <Text style={styles.rowLabel}>{t('fieldJobAddressLabel')}</Text>
+                          <Text style={styles.rowValue}>{detail.fieldJob.serviceAddress}</Text>
+                        </View>
+                      ) : null}
+                      {detail.fieldJob.syncStoreClockIn || detail.fieldJob.syncStoreClockOut ? (
+                        <Text style={styles.itemMeta}>{t('fieldJobMissedPunchSyncHint')}</Text>
+                      ) : null}
+                    </>
+                  ) : (
+                    <View style={styles.row}>
+                      <Text style={styles.rowLabel}>{t('requestShiftSegment')}</Text>
+                      <Text style={styles.rowValue}>
+                        {detail.shifts[0] ? formatShiftBindingLine(detail.shifts[0]) : '—'}
+                      </Text>
+                    </View>
+                  )}
                   {detail.missedPunch ? (
                     <>
                       <View style={styles.row}>

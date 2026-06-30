@@ -19,8 +19,6 @@ import { getTodayShiftBadgeKind, type TodayShiftBadgeKind } from '../utils/sched
 import { getApproximateServerNowDate } from '../utils/serverClock';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
 
-const ROW_ICON_COLORS = [colors.primary, colors.success, '#8B5CF6', '#F59E0B'];
-
 type Props = {
   slot: MyPublishedShiftSlot;
   index: number;
@@ -113,7 +111,6 @@ export function TodayShiftRow({
     leaveRequestStatus,
   );
   const badge = badgeStyle(badgeKind);
-  const iconColor = ROW_ICON_COLORS[index % ROW_ICON_COLORS.length];
   const location = slot.areaName?.trim() || slot.shiftName?.trim() || '—';
 
   const showMissedApplyAvailable = actions.showMissedApply && !missedPunchApplyBlocked;
@@ -135,7 +132,7 @@ export function TodayShiftRow({
   return (
     <>
       <View style={styles.row}>
-        <View style={[styles.iconBox, { backgroundColor: iconColor }]}>
+        <View style={styles.iconBox}>
           <Text style={styles.iconLetter}>{slot.shiftName?.trim().charAt(0).toUpperCase() || 'S'}</Text>
         </View>
         <View style={styles.main}>
@@ -256,6 +253,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.store,
   },
   iconLetter: { color: '#fff', fontSize: 15, fontWeight: '800' },
   main: { flex: 1, minWidth: 0 },

@@ -65,6 +65,12 @@ import {
 import { weekNavigatorLabels } from '../../src/utils/localeDateFormat';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
 import { canApplyMissedPunchKind } from '../../src/utils/shiftClockWindow';
+import {
+  canApplyFieldMissedPunchKind,
+  fieldJobScheduledRange,
+  findOpenFieldMissedPunchRequest,
+} from '../../src/utils/fieldMissedPunchEligibility';
+import type { TimelineFieldJobItem } from '../../src/types/fieldService';
 
 function sanitizeRouteParam(value?: string | string[] | null): string {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -95,10 +101,19 @@ function buildShiftsFromSelection(
 
 type RequestCreateParams = {
   type?: string;
+  source?: string;
   workDate?: string;
   slotIndex?: string;
+  scheduleId?: string;
   punchKind?: string;
   range?: string;
+  fieldJobId?: string;
+  customerName?: string;
+  jobStart?: string;
+  jobEnd?: string;
+  serviceAddress?: string;
+  syncStoreClockIn?: string;
+  syncStoreClockOut?: string;
 };
 
 export default function RequestCreateScreen() {
@@ -146,6 +161,27 @@ export default function RequestCreateScreen() {
   const closingAfterSubmitRef = useRef(false);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
+  const isFieldMissedPunch =
+    sanitizeRouteParam(params.source) === 'field' && type === 'missed_punch';
+
+  const fieldJobFromRoute = useMemo((): TimelineFieldJobItem | null => {
+    if (!isFieldMissedPunch) return null;
+    const id = sanitizeRouteParam(params.fieldJobId);
+    if (!id) return null;
+    return {
+      type: 'field_job',
+      id,
+      start: sanitizeRouteParam(params.jobStart) || '09:00',
+      end: sanitizeRouteParam(params.jobEnd) || '17:00',
+      customerName: sanitizeRouteParam(params.customerName),
+      serviceAddress: sanitizeRouteParam(params.serviceAddress),
+      latitude: 0,
+      longitude: 0,
+      geofenceRadius: 100,
+      syncStoreClockIn: sanitizeRouteParam(params.syncStoreClockIn) === '1',
+      syncStoreClockOut: sanitizeRouteParam(params.syncStoreClockOut) === '1',
+    };
+  }, [isFieldMissedPunch, params]);
 
   const daySlots = useMemo(() => requestScheduleContext?.slots ?? [], [requestScheduleContext]);
   const selectedSlot = daySlots[slotIndex];
@@ -162,16 +198,39 @@ export default function RequestCreateScreen() {
   }, [selectedSlot, shiftPunches]);
 
   const missedPunchWheelAnchor = useMemo(() => {
+    if (isFieldMissedPunch && fieldJobFromRoute) {
+      const hm = fieldJobFromRoute[punchKind === 'out' ? 'end' : 'start'];
+      if (/^\d{2}:\d{2}/.test(hm)) return hm.slice(0, 5);
+      if (/^\d{4}-\d{2}-\d{2}T/.test(hm)) {
+        const d = new Date(hm);
+        if (!Number.isNaN(d.getTime())) {
+          return `${`${d.getHours()}`.padStart(2, '0')}:${`${d.getMinutes()}`.padStart(2, '0')}`;
+        }
+      }
+      return punchKind === 'out' ? '17:00' : '09:00';
+    }
     if (!selectedSlot) return '09:00';
     return hmFromShiftRange(selectedSlot.range, punchKind === 'out' ? 'end' : 'start');
-  }, [selectedSlot, punchKind]);
+  }, [isFieldMissedPunch, fieldJobFromRoute, selectedSlot, punchKind]);
+
+  const blockingFieldMissedPunchDuplicate = useMemo(() => {
+    if (!isFieldMissedPunch || !fieldJobFromRoute) return undefined;
+    return findOpenFieldMissedPunchRequest(myAttendanceRequests, fieldJobFromRoute.id, punchKind);
+  }, [isFieldMissedPunch, fieldJobFromRoute, myAttendanceRequests, punchKind]);
+
+  const blockingFieldMissedPunchTooEarly = useMemo(() => {
+    if (!isFieldMissedPunch || !fieldJobFromRoute) return false;
+    return !canApplyFieldMissedPunchKind(fieldJobFromRoute, punchKind, getApproximateServerNowDate(), todayIso);
+  }, [isFieldMissedPunch, fieldJobFromRoute, punchKind, todayIso]);
 
   const blockingMissedPunchLeave = useMemo(() => {
+    if (isFieldMissedPunch) return false;
     if (type !== 'missed_punch' || !selectedSlot) return false;
     return isMissedPunchBlockedByLeave(myAttendanceRequests, normalizedWorkDate, selectedSlot);
   }, [type, myAttendanceRequests, normalizedWorkDate, selectedSlot]);
 
   const blockingMissedPunchDuplicate = useMemo(() => {
+    if (isFieldMissedPunch) return blockingFieldMissedPunchDuplicate;
     if (type !== 'missed_punch' || !selectedSlot) return undefined;
     return findOpenMissedPunchRequest(
       myAttendanceRequests,
@@ -182,6 +241,7 @@ export default function RequestCreateScreen() {
   }, [type, myAttendanceRequests, normalizedWorkDate, selectedSlot, punchKind]);
 
   const blockingMissedPunchTooEarly = useMemo(() => {
+    if (isFieldMissedPunch) return blockingFieldMissedPunchTooEarly;
     if (type !== 'missed_punch' || !selectedSlot) return false;
     const now = getApproximateServerNowDate();
     return !canApplyMissedPunchKind(
@@ -674,7 +734,9 @@ export default function RequestCreateScreen() {
     setSlotIndex((prev) => (prev === safeIdx ? prev : safeIdx));
     setPunchKind((prev) => (prev === nextPunchKind ? prev : nextPunchKind));
 
-    const nextProposedTime = slot
+    const nextProposedTime = isFieldMissedPunch && fieldJobFromRoute
+      ? missedPunchWheelAnchor
+      : slot
       ? hmFromShiftRange(slot.range, nextPunchKind === 'out' ? 'end' : 'start')
       : null;
     if (nextProposedTime) {
@@ -694,7 +756,7 @@ export default function RequestCreateScreen() {
     } else {
       setSelectedShiftKeys((prev) => (Object.keys(prev).length === 0 ? prev : {}));
     }
-  }, [params, requestScheduleContext, publishedScheduleByDate]);
+  }, [params, requestScheduleContext, publishedScheduleByDate, isFieldMissedPunch, fieldJobFromRoute, missedPunchWheelAnchor]);
 
   const routeParamsKey = useMemo(() => {
     const date = normalizeDateKeyOrToday(params.workDate);
@@ -806,6 +868,33 @@ export default function RequestCreateScreen() {
       if (!res.ok) {
         setSubmitBusy(false);
         Alert.alert(t('typeLeave'), res.message ?? t('requestSubmitFailed'));
+        return;
+      }
+    } else if (isFieldMissedPunch) {
+      if (!fieldJobFromRoute) return;
+      const now = getApproximateServerNowDate();
+      const today = calendarDateKey(now);
+      if (!canApplyFieldMissedPunchKind(fieldJobFromRoute, punchKind, now, today)) {
+        Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
+        return;
+      }
+      if (blockingMissedPunchDuplicate) {
+        Alert.alert(t('typeMissedPunch'), t('missedPunchAlreadyPending'));
+        return;
+      }
+      setSubmitBusy(true);
+      const res = await submitAttendanceRequest({
+        type: 'missed_punch',
+        source: 'field',
+        reason: reasonText,
+        workDate: normalizedWorkDate,
+        fieldJobId: fieldJobFromRoute.id,
+        punchKind,
+        proposedTime: proposedTime.trim(),
+      });
+      if (!res.ok) {
+        setSubmitBusy(false);
+        Alert.alert(t('typeMissedPunch'), res.message ?? t('requestSubmitFailed'));
         return;
       }
     } else {
@@ -936,7 +1025,62 @@ export default function RequestCreateScreen() {
     !submitBusy &&
     (type === 'leave'
       ? selectedLeaveCount > 0 && leavePartialValid
-      : daySlots.length > 0 && !!selectedSlot && !blockingMissedPunch);
+      : isFieldMissedPunch
+        ? !!fieldJobFromRoute && !blockingMissedPunch
+        : daySlots.length > 0 && !!selectedSlot && !blockingMissedPunch);
+
+  const renderFieldMissedPunchForm = () => {
+    if (!fieldJobFromRoute) {
+      return <Text style={styles.warn}>{t('fieldJobMissedPunchMissing')}</Text>;
+    }
+    const range = fieldJobScheduledRange(fieldJobFromRoute);
+    const syncHint =
+      (punchKind === 'in' && fieldJobFromRoute.syncStoreClockIn) ||
+      (punchKind === 'out' && fieldJobFromRoute.syncStoreClockOut)
+        ? t('fieldJobMissedPunchSyncHint')
+        : null;
+    return (
+      <>
+        <Text style={styles.label}>{t('requestWorkDate')}</Text>
+        <Text style={styles.dateReadonly}>{formatPunchHeaderDate(workDate, i18n.language)}</Text>
+        <Text style={styles.label}>{t('fieldJobMissedPunchTarget')}</Text>
+        <View style={styles.slotCard}>
+          <Text style={styles.slotCardTitle}>{fieldJobFromRoute.customerName || t('todayTimelineFieldJob')}</Text>
+          <Text style={styles.slotCardTime}>{range}</Text>
+          {fieldJobFromRoute.serviceAddress ? (
+            <Text style={styles.slotCardTime}>{fieldJobFromRoute.serviceAddress}</Text>
+          ) : null}
+        </View>
+        {blockingMissedPunchTooEarly ? (
+          <Text style={styles.warn}>{t('missedPunchBeforePunchTime')}</Text>
+        ) : blockingMissedPunchDuplicate ? (
+          <Text style={styles.warn}>{t('missedPunchAlreadyPending')}</Text>
+        ) : null}
+        <Text style={styles.label}>{t('missedPunchKind')}</Text>
+        <View style={styles.row}>
+          <Pressable
+            onPress={() => setPunchKind('in')}
+            style={[styles.chip, punchKind === 'in' && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, punchKind === 'in' && styles.chipTextOn]}>{t('clockIn')}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setPunchKind('out')}
+            style={[styles.chip, punchKind === 'out' && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, punchKind === 'out' && styles.chipTextOn]}>{t('clockOut')}</Text>
+          </Pressable>
+        </View>
+        {syncHint ? <Text style={styles.warn}>{syncHint}</Text> : null}
+        <Text style={styles.label}>{t('missedPunchProposedTime')}</Text>
+        <TimeSelectField
+          value={proposedTime}
+          onChange={setProposedTime}
+          wheelAnchor={missedPunchWheelAnchor}
+        />
+      </>
+    );
+  };
 
   const renderMissedPunchForm = () => (
     <>
@@ -1370,7 +1514,11 @@ export default function RequestCreateScreen() {
             scrollEventThrottle={16}
             showsVerticalScrollIndicator
           >
-            {type === 'missed_punch' ? renderMissedPunchForm() : renderLeaveForm()}
+            {type === 'missed_punch'
+              ? isFieldMissedPunch
+                ? renderFieldMissedPunchForm()
+                : renderMissedPunchForm()
+              : renderLeaveForm()}
 
             <View ref={reasonWrapRef} collapsable={false}>
               <Text style={styles.label}>{t('reason')}</Text>

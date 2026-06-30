@@ -52,6 +52,7 @@ function mapFieldJob(raw: Record<string, unknown>): TimelineFieldJobItem {
     start: asString(raw.start || raw.startTime || raw.start_time),
     end: asString(raw.end || raw.endTime || raw.end_time),
     customerName: asString(raw.customerName || raw.customer_name),
+    customerPhone: asString(raw.customerPhone || raw.customer_phone) || undefined,
     serviceAddress: asString(raw.serviceAddress || raw.service_address),
     serviceType: asString(raw.serviceType || raw.service_type),
     latitude: asNumber(raw.latitude),

@@ -32,6 +32,7 @@ export interface TimelineFieldJobItem {
   start: string;
   end: string;
   customerName: string;
+  customerPhone?: string;
   serviceAddress: string;
   serviceType?: string;
   latitude: number;
@@ -73,5 +74,6 @@ export interface EmployeePunchPayload {
   punchType: 'clock_in' | 'clock_out';
   latitude: number;
   longitude: number;
-  deviceId?: string;
+  deviceType: 'ios' | 'android';
+  deviceId: string;
 }
