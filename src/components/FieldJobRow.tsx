@@ -1,19 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { LeaveRequest } from '../context/AuthContext';
 import type { TimelineFieldJobItem } from '../types/fieldService';
 import { colors } from '../theme/colors';
 import { formatPunchHm } from '../utils/formatPunchTime';
 import {
-  canApplyFieldMissedPunchKind,
-  fieldJobScheduledRange,
-  findOpenFieldMissedPunchRequest,
+  canApplyFieldMissedPunchIn,
+  canApplyFieldMissedPunchOut,
+  preferredFieldMissedPunchKind,
   getFieldJobDisplayState,
   type FieldJobDisplayState,
 } from '../utils/fieldMissedPunchEligibility';
 import { openFieldMissedPunchRequest } from '../utils/openFieldRequest';
+import { formatFieldServiceType, formatFieldSyncConfig } from '../utils/fieldServiceType';
 import { canOpenMapsNavigation, openMapsNavigation } from '../utils/openMapsNavigation';
 import { canOpenPhoneDial, openPhoneDial } from '../utils/openPhoneDial';
 import { getApproximateServerNowDate } from '../utils/serverClock';
@@ -42,6 +44,8 @@ function badgeForState(state: FieldJobDisplayState) {
       return { bg: '#FEE2E2', text: '#B91C1C', icon: 'alert-circle-outline' as const, key: 'fieldJobBadgeIncomplete' };
     case 'missed_punch_pending':
       return { bg: '#FEF3C7', text: '#B45309', icon: 'document-text-outline' as const, key: 'fieldJobBadgeMissedPending' };
+    case 'missed_punch_partial':
+      return { bg: '#FEF3C7', text: '#B45309', icon: 'alert-circle-outline' as const, key: 'fieldJobBadgeMissedPartial' };
     case 'missed_punch_approved':
       return { bg: '#D1FAE5', text: '#047857', icon: 'checkmark-circle-outline' as const, key: 'fieldJobBadgeMissedApproved' };
     case 'not_started':
@@ -98,6 +102,7 @@ function ContactActionRow({
 
 export function FieldJobRow({ job, nested = false, workDateIso, attendanceRequests = [] }: Props) {
   const { t, i18n } = useTranslation();
+  const [detailVisible, setDetailVisible] = useState(false);
   const now = getApproximateServerNowDate();
   const displayState = getFieldJobDisplayState(job, attendanceRequests, now);
   const badge = badgeForState(displayState);
@@ -115,17 +120,8 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
   const endHm = formatJobTime(job.end, i18n.language);
   const range = `${startHm}\u00A0-\u00A0${endHm}`;
 
-  const hasIn = !!job.fieldClockInAt;
-  const hasOut = !!job.fieldClockOutAt;
-  const canApplyIn =
-    !hasIn &&
-    !findOpenFieldMissedPunchRequest(attendanceRequests, job.id, 'in') &&
-    canApplyFieldMissedPunchKind(job, 'in', now);
-  const canApplyOut =
-    hasIn &&
-    !hasOut &&
-    !findOpenFieldMissedPunchRequest(attendanceRequests, job.id, 'out') &&
-    canApplyFieldMissedPunchKind(job, 'out', now);
+  const canApplyIn = canApplyFieldMissedPunchIn(job, attendanceRequests, now);
+  const canApplyOut = canApplyFieldMissedPunchOut(job, attendanceRequests, now);
   const showMissedApply = canApplyIn || canApplyOut;
 
   const onAddressPress = async () => {
@@ -147,7 +143,8 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
   };
 
   const onMissedApply = () => {
-    const punchKind: 'in' | 'out' = canApplyIn ? 'in' : 'out';
+    const punchKind = preferredFieldMissedPunchKind(job, attendanceRequests, now);
+    if (!punchKind) return;
     openFieldMissedPunchRequest({ job, punchKind, workDate: workDateIso });
   };
 
@@ -156,41 +153,53 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
       ? t('fieldJobMissedPunchSyncHint')
       : null;
 
+  const serviceType = formatFieldServiceType(job.serviceType, t);
+  const notes = job.notes?.trim() ?? '';
+  const syncConfig = formatFieldSyncConfig(job, t);
+  const detailEmpty = t('fieldJobDetailEmpty');
+
   return (
     <View style={[styles.card, nested && styles.cardNested]}>
-      <View style={styles.headerRow}>
-        <View style={styles.iconBox}>
-          <Ionicons color="#FFFFFF" name="car-outline" size={18} />
-        </View>
-        <View style={styles.main}>
-          <View style={styles.titleRow}>
-            <Text style={styles.kind} numberOfLines={1}>
-              {t('todayTimelineFieldJob')}
-            </Text>
-            <View style={[styles.pill, { backgroundColor: badge.bg }]}>
-              <Ionicons color={badge.text} name={badge.icon} size={11} />
-              <Text style={[styles.pillText, { color: badge.text }]}>{t(badge.key)}</Text>
-            </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('fieldJobDetailOpen')}
+        onPress={() => setDetailVisible(true)}
+        style={({ pressed }) => [styles.headerPressable, pressed && styles.headerPressablePressed]}
+      >
+        <View style={styles.headerRow}>
+          <View style={styles.iconBox}>
+            <Ionicons color="#FFFFFF" name="car-outline" size={18} />
           </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.range}>{range}</Text>
-            {customerName ? (
-              <>
-                <Text style={styles.metaSep}>{' \u00b7 '}</Text>
-                <Text style={styles.customerName} numberOfLines={1}>
-                  {customerName}
-                </Text>
-              </>
+          <View style={styles.main}>
+            <View style={styles.titleRow}>
+              <Text style={styles.kind} numberOfLines={1}>
+                {t('todayTimelineFieldJob')}
+              </Text>
+              <View style={[styles.pill, { backgroundColor: badge.bg }]}>
+                <Ionicons color={badge.text} name={badge.icon} size={11} />
+                <Text style={[styles.pillText, { color: badge.text }]}>{t(badge.key)}</Text>
+              </View>
+            </View>
+            <View style={styles.metaRow}>
+              <Text style={styles.range}>{range}</Text>
+              {customerName ? (
+                <>
+                  <Text style={styles.metaSep}>{' \u00b7 '}</Text>
+                  <Text style={styles.customerName} numberOfLines={1}>
+                    {customerName}
+                  </Text>
+                </>
+              ) : null}
+            </View>
+            {displayState === 'incomplete' ? (
+              <Text style={styles.hintText}>{t('fieldJobIncompleteHint')}</Text>
+            ) : null}
+            {displayState === 'missed_punch_pending' ? (
+              <Text style={styles.hintText}>{t('fieldJobMissedPendingHint')}</Text>
             ) : null}
           </View>
-          {displayState === 'incomplete' ? (
-            <Text style={styles.hintText}>{t('fieldJobIncompleteHint')}</Text>
-          ) : null}
-          {displayState === 'missed_punch_pending' ? (
-            <Text style={styles.hintText}>{t('fieldJobMissedPendingHint')}</Text>
-          ) : null}
         </View>
-      </View>
+      </Pressable>
       <View style={styles.contactBlock}>
         {canNavigate ? (
           <ContactActionRow
@@ -234,6 +243,56 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
           </Pressable>
         </View>
       ) : null}
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={detailVisible}
+        onRequestClose={() => setDetailVisible(false)}
+      >
+        <View style={styles.modalWrap}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setDetailVisible(false)}
+            style={styles.modalBackdrop}
+          />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t('fieldJobDetailTitle')}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('cancel')}
+                hitSlop={8}
+                onPress={() => setDetailVisible(false)}
+                style={styles.modalCloseBtn}
+              >
+                <Ionicons color={colors.textMuted} name="close" size={22} />
+              </Pressable>
+            </View>
+            {customerName ? (
+              <Text style={styles.modalSubtitle} numberOfLines={2}>
+                {customerName}
+                {' · '}
+                {range}
+              </Text>
+            ) : (
+              <Text style={styles.modalSubtitle}>{range}</Text>
+            )}
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>{t('fieldJobServiceType')}</Text>
+              <Text style={styles.modalValue}>{serviceType || detailEmpty}</Text>
+            </View>
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>{t('fieldJobSyncStore')}</Text>
+              <Text style={styles.modalValueMultiline}>{syncConfig}</Text>
+            </View>
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>{t('fieldJobNotes')}</Text>
+              <Text style={styles.modalValueMultiline}>{notes || detailEmpty}</Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -257,6 +316,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     borderColor: '#E2E8F0',
   },
+  headerPressable: {
+    marginHorizontal: -4,
+    marginTop: -4,
+    paddingHorizontal: 4,
+    paddingTop: 4,
+    borderRadius: 10,
+  },
+  headerPressablePressed: { backgroundColor: 'rgba(15, 23, 42, 0.04)' },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -351,4 +418,42 @@ const styles = StyleSheet.create({
   },
   applyBtnPressed: { opacity: 0.88 },
   applyBtnText: { fontSize: 14, fontWeight: '700', color: colors.fieldInk },
+  modalWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  modalCard: {
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    padding: 20,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: colors.text },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSubtitle: { fontSize: 13, fontWeight: '600', color: colors.textMuted, lineHeight: 18 },
+  modalField: { gap: 6 },
+  modalLabel: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase' },
+  modalValue: { fontSize: 15, fontWeight: '600', color: colors.text, lineHeight: 22 },
+  modalValueMultiline: { fontSize: 15, fontWeight: '500', color: colors.text, lineHeight: 22 },
 });

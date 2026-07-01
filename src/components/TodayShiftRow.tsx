@@ -14,6 +14,7 @@ import {
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
 import { colors } from '../theme/colors';
+import { StoreShiftIcon } from './icons/StoreShiftIcon';
 import type { ShiftLeaveRequestStatus } from '../utils/leaveRequestEligibility';
 import { getTodayShiftBadgeKind, type TodayShiftBadgeKind } from '../utils/scheduleHeroShift';
 import { getApproximateServerNowDate } from '../utils/serverClock';
@@ -133,7 +134,7 @@ export function TodayShiftRow({
     <>
       <View style={styles.row}>
         <View style={styles.iconBox}>
-          <Text style={styles.iconLetter}>{slot.shiftName?.trim().charAt(0).toUpperCase() || 'S'}</Text>
+          <StoreShiftIcon color="#fff" size={20} />
         </View>
         <View style={styles.main}>
           <Text style={styles.range}>{slot.range.replace(/[–—−‐‑‒-]/g, ' - ')}</Text>

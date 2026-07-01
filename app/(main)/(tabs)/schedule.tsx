@@ -54,7 +54,11 @@ import { findActiveFieldJob, resolveFieldJobsForSchedule } from '../../../src/ut
 import type { TimelineFieldJobItem, TodayWorkSummary, TodayWorkTimelineItem } from '../../../src/types/fieldService';
 import {
   executeWorkPunch,
+  fieldBlocksHeroStoreClockOut,
+  isClockInWorkAction,
+  isClockOutWorkAction,
   isWorkPunchActionEnabled,
+  resolveEffectiveWorkAction,
 } from '../../../src/utils/workPunch';
 
 function parseIsoToLocalDate(iso: string): Date {
@@ -99,6 +103,7 @@ export default function ScheduleScreen() {
   const [punchBusyId, setPunchBusyId] = useState<string | null>(null);
   const [fieldJobsByShiftId, setFieldJobsByShiftId] = useState<Record<string, TimelineFieldJobItem[]>>({});
   const [standaloneFieldJobs, setStandaloneFieldJobs] = useState<TimelineFieldJobItem[]>([]);
+  const [allFieldJobs, setAllFieldJobs] = useState<TimelineFieldJobItem[]>([]);
   const [fieldTimeline, setFieldTimeline] = useState<TodayWorkTimelineItem[]>([]);
   const [workSummary, setWorkSummary] = useState<TodayWorkSummary | null>(null);
 
@@ -169,15 +174,13 @@ export default function ScheduleScreen() {
   }, [selectedStoreId, todayIso]);
 
   useEffect(() => {
-    const resolved = resolveFieldJobsForSchedule(todayShifts, fieldTimeline);
+    const resolved = resolveFieldJobsForSchedule(todayShifts, fieldTimeline, todayIso);
     setFieldJobsByShiftId(resolved.fieldJobsByShiftId);
     setStandaloneFieldJobs(resolved.standaloneFieldJobs);
-  }, [todayShifts, fieldTimeline]);
+    setAllFieldJobs(resolved.allFieldJobs);
+  }, [todayShifts, fieldTimeline, todayIso]);
 
-  const totalFieldJobs = useMemo(() => {
-    const nested = Object.values(fieldJobsByShiftId).flat();
-    return nested.length + standaloneFieldJobs.length;
-  }, [fieldJobsByShiftId, standaloneFieldJobs]);
+  const totalFieldJobs = allFieldJobs.length;
 
   const loadTodayPunches = useCallback(async () => {
     if (!selectedStoreId) return;
@@ -227,13 +230,25 @@ export default function ScheduleScreen() {
   );
 
   const heroSlot = heroIndex >= 0 ? todayShifts[heroIndex] : undefined;
-  const workAction = workSummary?.currentPunchAction;
   const activeFieldJob = useMemo(() => findActiveFieldJob(fieldTimeline), [fieldTimeline]);
-  const showHeroCard =
-    !!heroSlot ||
-    isWorkPunchActionEnabled(workAction) ||
-    workAction?.action === 'WAITING' ||
-    workAction?.action === 'DONE';
+  const workAction = useMemo(
+    () => resolveEffectiveWorkAction(workSummary?.currentPunchAction, activeFieldJob),
+    [workSummary?.currentPunchAction, activeFieldJob],
+  );
+  const hasVisibleTodayWork =
+    todayShifts.length > 0 || totalFieldJobs > 0 || fieldTimeline.length > 0;
+
+  const showHeroCard = useMemo(() => {
+    if (!hasVisibleTodayWork) {
+      return isWorkPunchActionEnabled(workAction);
+    }
+    return (
+      !!heroSlot ||
+      isWorkPunchActionEnabled(workAction) ||
+      workAction?.action === 'WAITING' ||
+      workAction?.action === 'DONE'
+    );
+  }, [hasVisibleTodayWork, heroSlot, workAction]);
 
   const runPunch = useCallback(
     async (slot: MyPublishedShiftSlot) => {
@@ -267,8 +282,55 @@ export default function ScheduleScreen() {
   );
 
   const onHeroPunch = useCallback(async () => {
-    const action = workSummary?.currentPunchAction;
-    if (isWorkPunchActionEnabled(action) && action && selectedStoreId) {
+    const action = resolveEffectiveWorkAction(workSummary?.currentPunchAction, activeFieldJob);
+    const now = getApproximateServerNowDate();
+
+    const heroPunchBlocked = fieldBlocksHeroStoreClockOut({
+      activeFieldJob,
+      now,
+    });
+
+    if (heroSlot) {
+      const punch = getShiftPunch(todayIso, heroSlot);
+      const pairPunch = getPairPunch(heroSlot);
+      const heroActions = getShiftCardActions(
+        todayIso,
+        heroSlot.range,
+        punch,
+        todayIso,
+        now,
+        punchesKnown,
+        heroSlot.overnightRole ?? 'normal',
+        pairPunch,
+      );
+      if (heroActions.showClockOut && !heroPunchBlocked) {
+        await runPunch(heroSlot);
+        return;
+      }
+    }
+
+    if (isWorkPunchActionEnabled(action) && action && isClockOutWorkAction(action.action) && selectedStoreId) {
+      setPunchBusyId('work');
+      try {
+        const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
+        setWorkSummary(summary);
+        setFieldTimeline(summary.timeline);
+        await loadTodayPunches();
+        Alert.alert(t('tabSchedule'), t('punchSuccess'));
+      } catch (e) {
+        if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
+          Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
+          return;
+        }
+        const message = e instanceof ApiError ? e.message : t('punchFailed');
+        Alert.alert(t('tabSchedule'), message);
+      } finally {
+        setPunchBusyId(null);
+      }
+      return;
+    }
+
+    if (isWorkPunchActionEnabled(action) && action && isClockInWorkAction(action.action) && selectedStoreId) {
       setPunchBusyId('work');
       try {
         const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
@@ -291,7 +353,7 @@ export default function ScheduleScreen() {
     if (heroSlot) {
       await runPunch(heroSlot);
     }
-  }, [workSummary, selectedStoreId, loadTodayPunches, t, heroSlot, runPunch]);
+  }, [workSummary, activeFieldJob, selectedStoreId, loadTodayPunches, t, heroSlot, runPunch, getShiftPunch, getPairPunch, todayIso, punchesKnown, myAttendanceRequests]);
 
   const refreshPageData = useCallback(async () => {
     await Promise.all([
@@ -580,9 +642,6 @@ export default function ScheduleScreen() {
               })}
               {standaloneFieldJobs.length > 0 ? (
                 <View style={styles.fieldJobsSection}>
-                  {todayShifts.length > 0 ? (
-                    <Text style={styles.fieldJobsSectionTitle}>{t('scheduleFieldJobsTitle')}</Text>
-                  ) : null}
                   {standaloneFieldJobs.map((job) => (
                     <FieldJobRow
                       key={job.id || `standalone-${job.start}`}

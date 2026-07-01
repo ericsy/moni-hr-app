@@ -72,13 +72,90 @@ export function canApplyFieldMissedPunchKind(
   return now.getTime() >= eligibleAfter.getTime();
 }
 
-export function canApplyFieldMissedPunch(job: TimelineFieldJobItem, now = getApproximateServerNowDate()): boolean {
+/** 外勤上班漏打卡是否可申请（缺卡、无占用申请、已过可申请时刻） */
+export function canApplyFieldMissedPunchIn(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  if (job.fieldClockInAt) return false;
+  if (findOpenFieldMissedPunchRequest(requests, job.id, 'in')) return false;
+  return canApplyFieldMissedPunchKind(job, 'in', now, calendarDateKey(now));
+}
+
+/** 外勤下班漏打卡是否可申请（缺卡、无占用申请、已过可申请时刻；不要求已打上班卡） */
+export function canApplyFieldMissedPunchOut(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  if (job.fieldClockOutAt) return false;
+  if (findOpenFieldMissedPunchRequest(requests, job.id, 'out')) return false;
+  return canApplyFieldMissedPunchKind(job, 'out', now, calendarDateKey(now));
+}
+
+export function preferredFieldMissedPunchKind(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): 'in' | 'out' | null {
+  if (canApplyFieldMissedPunchIn(job, requests, now)) return 'in';
+  if (canApplyFieldMissedPunchOut(job, requests, now)) return 'out';
+  return null;
+}
+
+export function canApplyFieldMissedPunch(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  return preferredFieldMissedPunchKind(job, requests, now) != null;
+}
+
+/** 是否已过外勤计划结束时刻（可开始完成打卡） */
+export function isPastFieldScheduledEnd(
+  job: TimelineFieldJobItem,
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  const workDate = fieldJobWorkDate(job);
   const todayIso = calendarDateKey(now);
-  const hasIn = !!job.fieldClockInAt;
-  const hasOut = !!job.fieldClockOutAt;
-  if (!hasIn && canApplyFieldMissedPunchKind(job, 'in', now, todayIso)) return true;
-  if (hasIn && !hasOut && canApplyFieldMissedPunchKind(job, 'out', now, todayIso)) return true;
-  return false;
+  if (compareDateKeys(workDate, todayIso) < 0) return true;
+  if (compareDateKeys(workDate, todayIso) > 0) return false;
+  const endAt = fieldMissedEligibleAfter(job, 'out');
+  return endAt != null && now.getTime() >= endAt.getTime();
+}
+
+/** 是否处于外勤完成打卡窗口（计划结束 ~ 结束+宽限） */
+export function isInFieldOutPunchWindow(
+  job: TimelineFieldJobItem,
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  const endAt = fieldMissedEligibleAfter(job, 'out');
+  if (!endAt) return false;
+  const windowEnd = new Date(endAt.getTime() + FIELD_PUNCH_OUT_LATE_MINUTES * 60_000);
+  return now.getTime() >= endAt.getTime() && now.getTime() <= windowEnd.getTime();
+}
+
+function fieldScheduledStartAt(job: TimelineFieldJobItem): Date | null {
+  const startRaw = job.start?.trim() ?? '';
+  if (/^\d{4}-\d{2}-\d{2}T/.test(startRaw)) {
+    const ms = Date.parse(startRaw);
+    return Number.isFinite(ms) ? new Date(ms) : null;
+  }
+  return fieldMissedEligibleAfter(job, 'in');
+}
+
+/** 当前是否尚未到外勤计划开始时刻 */
+export function isBeforeFieldScheduledStart(
+  job: TimelineFieldJobItem,
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  const workDate = fieldJobWorkDate(job);
+  const todayIso = calendarDateKey(now);
+  if (compareDateKeys(workDate, todayIso) > 0) return true;
+  if (compareDateKeys(workDate, todayIso) < 0) return false;
+  const startAt = fieldScheduledStartAt(job);
+  return startAt != null && now.getTime() < startAt.getTime();
 }
 
 export function findOpenFieldMissedPunchRequest(
@@ -95,12 +172,33 @@ export function findOpenFieldMissedPunchRequest(
   });
 }
 
+/** 该类型外勤卡是否已满足（实打卡或漏打卡已通过） */
+export function fieldPunchKindSatisfied(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[],
+  punchKind: 'in' | 'out',
+): boolean {
+  if (punchKind === 'in' && !!job.fieldClockInAt) return true;
+  if (punchKind === 'out' && !!job.fieldClockOutAt) return true;
+  return findOpenFieldMissedPunchRequest(requests, job.id, punchKind)?.status === 'approved';
+}
+
+export function isFieldJobFullyPunched(
+  job: TimelineFieldJobItem,
+  requests: LeaveRequest[],
+): boolean {
+  return (
+    fieldPunchKindSatisfied(job, requests, 'in') && fieldPunchKindSatisfied(job, requests, 'out')
+  );
+}
+
 export type FieldJobDisplayState =
   | 'not_started'
   | 'in_progress'
   | 'completed'
   | 'incomplete'
   | 'missed_punch_pending'
+  | 'missed_punch_partial'
   | 'missed_punch_approved';
 
 export function getFieldJobDisplayState(
@@ -112,16 +210,29 @@ export function getFieldJobDisplayState(
   const hasOut = !!job.fieldClockOutAt;
   if (hasIn && hasOut) return 'completed';
 
+  if (isFieldJobFullyPunched(job, requests)) {
+    return 'missed_punch_approved';
+  }
+
   const inOpen = findOpenFieldMissedPunchRequest(requests, job.id, 'in');
   const outOpen = findOpenFieldMissedPunchRequest(requests, job.id, 'out');
   if (inOpen || outOpen) {
-    const approval =
-      inOpen?.status === 'approved' || outOpen?.status === 'approved' ? 'approved' : 'pending';
-    return approval === 'approved' && hasIn && hasOut
-      ? 'completed'
-      : approval === 'approved'
-        ? 'missed_punch_approved'
-        : 'missed_punch_pending';
+    const canIn = canApplyFieldMissedPunchIn(job, requests, now);
+    const canOut = canApplyFieldMissedPunchOut(job, requests, now);
+    if (canIn || canOut) return 'incomplete';
+    if (inOpen?.status === 'pending' || outOpen?.status === 'pending') {
+      return 'missed_punch_pending';
+    }
+    if (
+      fieldPunchKindSatisfied(job, requests, 'in') !== fieldPunchKindSatisfied(job, requests, 'out')
+    ) {
+      return 'missed_punch_partial';
+    }
+    return 'missed_punch_pending';
+  }
+
+  if (!hasIn && !hasOut && isBeforeFieldScheduledStart(job, now)) {
+    return 'not_started';
   }
 
   const workDate = fieldJobWorkDate(job);
@@ -137,15 +248,24 @@ export function getFieldJobDisplayState(
 
   if ((!hasIn || (!hasOut && pastOutWindow)) && compareDateKeys(workDate, todayIso) <= 0) {
     const canIn = !hasIn && canApplyFieldMissedPunchKind(job, 'in', now, todayIso);
-    const canOut = hasIn && !hasOut && canApplyFieldMissedPunchKind(job, 'out', now, todayIso);
+    const canOut = !hasOut && canApplyFieldMissedPunchKind(job, 'out', now, todayIso);
+    if (!hasIn && isBeforeFieldScheduledStart(job, now)) return 'not_started';
     if (!hasIn && !canIn && compareDateKeys(workDate, todayIso) <= 0) return 'incomplete';
-    if (hasIn && !hasOut && pastOutWindow && !canOut) return 'incomplete';
+    if (!hasOut && pastOutWindow && !canOut) return 'incomplete';
     if (!hasIn && canIn) return 'not_started';
-    if (hasIn && !hasOut && pastOutWindow) return 'incomplete';
+    if (!hasOut && pastOutWindow) return 'incomplete';
   }
 
   if (hasIn && !hasOut) return 'in_progress';
   return 'not_started';
+}
+
+/** Hero「服务中」：已打外勤上班、未下班，且尚未到计划结束（仅看实打卡与时间） */
+export function shouldShowFieldHeroInService(
+  job: TimelineFieldJobItem,
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  return !!job.fieldClockInAt && !job.fieldClockOutAt && !isPastFieldScheduledEnd(job, now);
 }
 
 export function isStoreMissedPunchBlockedByFieldSync(

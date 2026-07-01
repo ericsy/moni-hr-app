@@ -1,5 +1,6 @@
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
+import type { OvernightRole } from './overnightShiftPair';
 import { calendarDateKey } from './calendarDateKey';
 import { getApproximateServerNowDate } from './serverClock';
 import { getShiftCardActions, parseShiftRange } from './shiftClockWindow';
@@ -43,6 +44,43 @@ export function minutesUntilShiftStart(range: string, now: Date = getApproximate
   return diff > 0 ? diff : null;
 }
 
+/** 距班次结束还有多少分钟；已结束、未开始或无法解析时返回 null */
+export function minutesUntilShiftEnd(
+  range: string,
+  now: Date = getApproximateServerNowDate(),
+  overnightRole: OvernightRole = 'normal',
+): number | null {
+  if (overnightRole === 'start') return null;
+  const parsed = parseShiftRange(range);
+  if (!parsed) return null;
+  const nowMin = nowMinutes(now);
+  const { startMin, endMin } = parsed;
+  const overnight = endMin <= startMin;
+
+  if (overnight) {
+    if (nowMin >= startMin) {
+      return 1440 - nowMin + endMin;
+    }
+    if (nowMin < endMin) {
+      return endMin - nowMin;
+    }
+    return null;
+  }
+
+  if (nowMin >= endMin || nowMin < startMin) return null;
+  return endMin - nowMin;
+}
+
+/** Hero 已打卡态：区域 · 班次（不含时段） */
+export function formatShiftHeroName(slot: Pick<MyPublishedShiftSlot, 'areaName' | 'shiftName'>): string {
+  const area = slot.areaName?.trim();
+  const shift = slot.shiftName?.trim();
+  if (area && shift && area !== shift) {
+    return `${area} · ${shift}`;
+  }
+  return area || shift || '—';
+}
+
 type PunchLookup = (slot: MyPublishedShiftSlot) => ShiftPunchRecord | undefined;
 
 function hasClockedInNotOut(
@@ -70,7 +108,7 @@ function isShiftPunchComplete(
   return !!punch?.clockInAt && !!punch?.clockOutAt;
 }
 
-/** 今日多班时：优先可下班打卡 → 已上班未下班 → 可上班打卡 → 即将开始 → 已完成置后 */
+/** 今日多班时：下班打卡优先于上班打卡（可下班 → 已上班未下班 → 可上班 → 即将开始 → 已完成置后） */
 export function pickHeroShiftIndex(
   slots: MyPublishedShiftSlot[],
   workDateIso: string,

@@ -2,27 +2,46 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
+import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { CurrentPunchAction, TimelineFieldJobItem } from '../types/fieldService';
 import { colors } from '../theme/colors';
+import { StoreShiftIcon } from './icons/StoreShiftIcon';
 import { formatPunchHm } from '../utils/formatPunchTime';
+import { shouldShowFieldHeroInService } from '../utils/fieldMissedPunchEligibility';
 import { getApproximateServerNowDate } from '../utils/serverClock';
 import {
   formatShiftEndHm,
+  formatShiftHeroName,
   formatShiftStartHm,
+  minutesUntilShiftEnd,
   minutesUntilShiftStart,
 } from '../utils/scheduleHeroShift';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
-import { isFieldWorkPunchAction, isWorkPunchActionEnabled, workPunchTitleKey } from '../utils/workPunch';
+import {
+  fieldBlocksHeroStoreClockOut,
+  isClockInWorkAction,
+  isClockOutWorkAction,
+  isFieldWorkPunchAction,
+  isWorkPunchActionEnabled,
+  workPunchTitleKey,
+} from '../utils/workPunch';
 
 type HeroDisplayMode = 'clock_in' | 'clock_out' | 'clocked_in' | 'completed' | 'idle';
 
-function formatFieldJobHm(value: string, language: string): string {
-  if (!value) return '--:--';
-  if (/^\d{2}:\d{2}(:\d{2})?$/.test(value)) return value.slice(0, 5);
-  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return formatPunchHm(value, language);
-  return value;
+function HeroCategoryIcon({
+  isField,
+  size = 28,
+  color = '#fff',
+}: {
+  isField: boolean;
+  size?: number;
+  color?: string;
+}) {
+  if (isField) {
+    return <Ionicons color={color} name="car-outline" size={size} />;
+  }
+  return <StoreShiftIcon color={color} size={size} />;
 }
 
 function resolveClockInIso(
@@ -55,146 +74,29 @@ function resolveHeroDisplayMode(
   return 'idle';
 }
 
-type Props = {
-  slot?: MyPublishedShiftSlot;
-  workDateIso: string;
-  todayIso: string;
-  punch?: ShiftPunchRecord;
-  pairPunch?: ShiftPunchRecord;
-  punchesKnown?: boolean;
-  punchBusy?: boolean;
-  workAction?: CurrentPunchAction;
-  activeFieldJob?: TimelineFieldJobItem;
-  onPunch: () => void | Promise<void>;
-};
-
-export function SchedulePunchHeroCard({
+function StoreShiftHeroBody({
+  actions,
+  clockInIso,
+  clockOutIso,
   slot,
-  workDateIso,
-  todayIso,
-  punch,
-  pairPunch,
-  punchesKnown = false,
   punchBusy,
-  workAction,
-  activeFieldJob,
   onPunch,
-}: Props) {
-  const { t, i18n } = useTranslation();
-  const now = getApproximateServerNowDate();
-  const workReady = isWorkPunchActionEnabled(workAction);
-  const workWaiting = workAction?.action === 'WAITING';
-  const workDone = workAction?.action === 'DONE';
-
-  if (workReady && workAction) {
-    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
-    const subtitle = workAction.hint ?? '';
-    const isField = isFieldWorkPunchAction(workAction.action);
-
-    return (
-      <View style={styles.card}>
-        <View style={styles.left}>
-          <View style={styles.clockIconWrap}>
-            <Ionicons color="#fff" name={isField ? 'car-outline' : 'time-outline'} size={28} />
-          </View>
-          <Text style={styles.title}>{title}</Text>
-          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-        </View>
-        <Pressable
-          accessibilityLabel={title}
-          disabled={punchBusy}
-          onPress={() => void onPunch()}
-          style={({ pressed }) => [
-            styles.punchBtn,
-            punchBusy && styles.punchBtnDisabled,
-            pressed && !punchBusy && styles.punchBtnPressed,
-          ]}
-        >
-          <View style={styles.punchCircle}>
-            {punchBusy ? (
-              <ActivityIndicator color={colors.text} size="small" />
-            ) : (
-              <Ionicons color={colors.text} name="finger-print" size={32} />
-            )}
-          </View>
-          <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  if (workWaiting && activeFieldJob) {
-    const startedAt = formatFieldJobHm(activeFieldJob.fieldClockInAt ?? '', i18n.language);
-    const completeAfter = formatFieldJobHm(activeFieldJob.end, i18n.language);
-    const customer = activeFieldJob.customerName?.trim();
-
-    return (
-      <View style={styles.card}>
-        <View style={styles.left}>
-          <View style={styles.clockIconWrap}>
-            <Ionicons color="#fff" name="car-outline" size={28} />
-          </View>
-          <Text style={styles.title}>{t('fieldServiceHeroInProgress')}</Text>
-          {customer ? <Text style={styles.subtitle}>{customer}</Text> : null}
-          <Text style={styles.subtitle}>
-            {t('fieldServiceHeroInProgressHint', { time: startedAt, end: completeAfter })}
-          </Text>
-        </View>
-        <View style={styles.punchBtn}>
-          <View style={[styles.punchCircle, styles.punchCircleInService]}>
-            <Ionicons color="#B45309" name="time-outline" size={36} />
-          </View>
-          <Text style={styles.punchBtnText}>{t('fieldServiceHeroInProgress')}</Text>
-        </View>
-      </View>
-    );
-  }
-
-  if ((workWaiting || workDone) && workAction) {
-    const title = workDone
-      ? workAction.buttonLabel || t('todayActionDone')
-      : workAction.hint || workAction.buttonLabel || t('todayActionWaiting');
-    const subtitle =
-      workDone || !workAction.hint || workAction.hint === title ? '' : workAction.hint;
-
-    return (
-      <View style={styles.card}>
-        <View style={styles.left}>
-          <View style={styles.clockIconWrap}>
-            <Ionicons color="#fff" name="time-outline" size={28} />
-          </View>
-          <Text style={styles.title}>{title}</Text>
-          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-        </View>
-        <View style={styles.punchBtn}>
-          <View style={[styles.punchCircle, styles.punchCircleDone]}>
-            <Ionicons color={workDone ? colors.success : colors.textMuted} name="checkmark-circle" size={36} />
-          </View>
-          <Text style={styles.punchBtnText}>{workDone ? t('todayActionDone') : t('todayActionWaiting')}</Text>
-        </View>
-      </View>
-    );
-  }
-
-  if (!slot) return null;
-
-  const actions = getShiftCardActions(
-    workDateIso,
-    slot.range,
-    punch,
-    todayIso,
-    now,
-    punchesKnown,
-    slot.overnightRole ?? 'normal',
-    pairPunch,
-  );
-
+  t,
+  i18n,
+  now,
+}: {
+  actions: ReturnType<typeof getShiftCardActions>;
+  clockInIso: string | undefined;
+  clockOutIso: string | undefined;
+  slot: MyPublishedShiftSlot;
+  punchBusy?: boolean;
+  onPunch: () => void | Promise<void>;
+  t: ReturnType<typeof useTranslation>['t'];
+  i18n: ReturnType<typeof useTranslation>['i18n'];
+  now: Date;
+}) {
   const canPunch = actions.showClockIn || actions.showClockOut;
-  const overnightRole = slot.overnightRole ?? 'normal';
-  const clockInIso = resolveClockInIso(punch, pairPunch, overnightRole);
-  const clockOutIso = punch?.clockOutAt;
   const heroMode = resolveHeroDisplayMode(actions, clockInIso, clockOutIso);
-
   const isClockOut = heroMode === 'clock_out';
   const title =
     heroMode === 'completed'
@@ -206,20 +108,31 @@ export function SchedulePunchHeroCard({
           : t('punchHeroClockIn');
   const timeLabel = isClockOut ? formatShiftEndHm(slot.range) : formatShiftStartHm(slot.range);
   const minutesLeft = heroMode === 'clock_in' ? minutesUntilShiftStart(slot.range, now) : null;
-  const clockInLabel =
-    heroMode === 'clocked_in' && clockInIso
-      ? t('punchHeroClockedInAt', { time: formatPunchHm(clockInIso, i18n.language) })
+  const minutesUntilEnd =
+    heroMode === 'clocked_in'
+      ? minutesUntilShiftEnd(slot.range, now, slot.overnightRole ?? 'normal')
       : null;
 
   return (
     <View style={styles.card}>
       <View style={styles.left}>
         <View style={styles.clockIconWrap}>
-          <Ionicons color="#fff" name="time-outline" size={28} />
+          <StoreShiftIcon color="#fff" size={28} />
         </View>
         <Text style={styles.title}>{title}</Text>
-        {heroMode === 'clocked_in' && clockInLabel ? (
-          <Text style={styles.subtitle}>{clockInLabel}</Text>
+        {heroMode === 'clocked_in' ? (
+          <>
+            <Text style={styles.subtitle} numberOfLines={2}>
+              {formatShiftHeroName(slot)}
+            </Text>
+            {minutesUntilEnd != null ? (
+              <View style={styles.countdownPill}>
+                <Text style={styles.countdownText}>
+                  {t('minutesUntilShiftEnd', { count: minutesUntilEnd })}
+                </Text>
+              </View>
+            ) : null}
+          </>
         ) : heroMode === 'completed' ? (
           <Text style={styles.subtitle}>
             {clockInIso && clockOutIso
@@ -268,6 +181,268 @@ export function SchedulePunchHeroCard({
         </Pressable>
       )}
     </View>
+  );
+}
+
+type Props = {
+  slot?: MyPublishedShiftSlot;
+  workDateIso: string;
+  todayIso: string;
+  punch?: ShiftPunchRecord;
+  pairPunch?: ShiftPunchRecord;
+  punchesKnown?: boolean;
+  punchBusy?: boolean;
+  workAction?: CurrentPunchAction;
+  activeFieldJob?: TimelineFieldJobItem;
+  onPunch: () => void | Promise<void>;
+};
+
+export function SchedulePunchHeroCard({
+  slot,
+  workDateIso,
+  todayIso,
+  punch,
+  pairPunch,
+  punchesKnown = false,
+  punchBusy,
+  workAction,
+  activeFieldJob,
+  onPunch,
+}: Props) {
+  const { t, i18n } = useTranslation();
+  const now = getApproximateServerNowDate();
+  const workReady = isWorkPunchActionEnabled(workAction);
+  const workWaiting = workAction?.action === 'WAITING';
+  const workDone = workAction?.action === 'DONE';
+
+  const overnightRole = slot?.overnightRole ?? 'normal';
+  const slotActions = slot
+    ? getShiftCardActions(
+        workDateIso,
+        slot.range,
+        punch,
+        todayIso,
+        now,
+        punchesKnown,
+        overnightRole,
+        pairPunch,
+      )
+    : null;
+  const slotCanPunch = !!(slotActions && (slotActions.showClockIn || slotActions.showClockOut));
+  const shouldPreferStoreShiftHero =
+    !!slot &&
+    !!slotActions &&
+    slotCanPunch &&
+    !workReady &&
+    workAction?.action !== 'DONE' &&
+    !(activeFieldJob && shouldShowFieldHeroInService(activeFieldJob, now));
+  const clockInIso = slot ? resolveClockInIso(punch, pairPunch, overnightRole) : undefined;
+  const clockOutIso = punch?.clockOutAt;
+
+  const fieldBlocksStoreClockOutHero = fieldBlocksHeroStoreClockOut({
+    activeFieldJob,
+    now,
+  });
+
+  // 1. 店班下班（优先于一切上班卡）
+  if (slot && slotActions?.showClockOut && !fieldBlocksStoreClockOutHero) {
+    return (
+      <StoreShiftHeroBody
+        actions={slotActions}
+        clockInIso={clockInIso}
+        clockOutIso={clockOutIso}
+        i18n={i18n}
+        now={now}
+        onPunch={onPunch}
+        punchBusy={punchBusy}
+        slot={slot}
+        t={t}
+      />
+    );
+  }
+
+  // 2. 外勤/店班下班类 work 动作
+  if (workReady && workAction && isClockOutWorkAction(workAction.action)) {
+    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
+    const isField = isFieldWorkPunchAction(workAction.action);
+    const subtitle = isField
+      ? t('todayTimelineFieldJob')
+      : slot
+        ? formatShiftHeroName(slot)
+        : workAction.hint ?? '';
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <HeroCategoryIcon isField={isField} />
+          </View>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <Pressable
+          accessibilityLabel={title}
+          disabled={punchBusy}
+          onPress={() => void onPunch()}
+          style={({ pressed }) => [
+            styles.punchBtn,
+            punchBusy && styles.punchBtnDisabled,
+            pressed && !punchBusy && styles.punchBtnPressed,
+          ]}
+        >
+          <View style={styles.punchCircle}>
+            {punchBusy ? (
+              <ActivityIndicator color={colors.text} size="small" />
+            ) : (
+              <Ionicons color={colors.text} name="finger-print" size={32} />
+            )}
+          </View>
+          <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const storeHeroMode = slotActions
+    ? resolveHeroDisplayMode(slotActions, clockInIso, clockOutIso)
+    : 'idle';
+
+  // 2b. 外勤服务中（已打上班、未到计划结束）：优先于 DONE / 通用等待
+  if (activeFieldJob && shouldShowFieldHeroInService(activeFieldJob, now)) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <Ionicons color="#fff" name="car-outline" size={28} />
+          </View>
+          <Text style={styles.title}>{t('fieldServiceHeroInProgress')}</Text>
+          <Text style={styles.subtitle}>{t('todayTimelineFieldJob')}</Text>
+        </View>
+        <View style={styles.punchBtn}>
+          <View style={[styles.punchCircle, styles.punchCircleInService]}>
+            <Ionicons color="#B45309" name="car-outline" size={36} />
+          </View>
+          <Text style={styles.punchBtnText}>{t('fieldServiceHeroInProgress')}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // 2c. 店班已上班、尚未到下班窗口（优先于通用 WAITING）
+  if (slot && slotActions && storeHeroMode === 'clocked_in') {
+    return (
+      <StoreShiftHeroBody
+        actions={slotActions}
+        clockInIso={clockInIso}
+        clockOutIso={clockOutIso}
+        i18n={i18n}
+        now={now}
+        onPunch={onPunch}
+        punchBusy={punchBusy}
+        slot={slot}
+        t={t}
+      />
+    );
+  }
+
+  if (shouldPreferStoreShiftHero && slot && slotActions) {
+    return (
+      <StoreShiftHeroBody
+        actions={slotActions}
+        clockInIso={clockInIso}
+        clockOutIso={clockOutIso}
+        i18n={i18n}
+        now={now}
+        onPunch={onPunch}
+        punchBusy={punchBusy}
+        slot={slot}
+        t={t}
+      />
+    );
+  }
+
+  // 3. 外勤/店班上班类 work 动作（仅当无下班卡可打时）
+  if (workReady && workAction && isClockInWorkAction(workAction.action)) {
+    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
+    const isField = isFieldWorkPunchAction(workAction.action);
+    const subtitle = isField
+      ? t('todayTimelineFieldJob')
+      : slot
+        ? formatShiftHeroName(slot)
+        : workAction.hint ?? '';
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <HeroCategoryIcon isField={isField} />
+          </View>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <Pressable
+          accessibilityLabel={title}
+          disabled={punchBusy}
+          onPress={() => void onPunch()}
+          style={({ pressed }) => [
+            styles.punchBtn,
+            punchBusy && styles.punchBtnDisabled,
+            pressed && !punchBusy && styles.punchBtnPressed,
+          ]}
+        >
+          <View style={styles.punchCircle}>
+            {punchBusy ? (
+              <ActivityIndicator color={colors.text} size="small" />
+            ) : (
+              <Ionicons color={colors.text} name="finger-print" size={32} />
+            )}
+          </View>
+          <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if ((workWaiting || workDone) && workAction) {
+    const title = workDone
+      ? workAction.buttonLabel || t('todayActionDone')
+      : workAction.hint || workAction.buttonLabel || t('todayActionWaiting');
+    const subtitle =
+      workDone || !workAction.hint || workAction.hint === title ? '' : workAction.hint;
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.left}>
+          <View style={styles.clockIconWrap}>
+            <StoreShiftIcon color="#fff" size={28} />
+          </View>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <View style={styles.punchBtn}>
+          <View style={[styles.punchCircle, styles.punchCircleDone]}>
+            <Ionicons color={workDone ? colors.success : colors.textMuted} name="checkmark-circle" size={36} />
+          </View>
+          <Text style={styles.punchBtnText}>{workDone ? t('todayActionDone') : t('todayActionWaiting')}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!slot || !slotActions) return null;
+
+  return (
+    <StoreShiftHeroBody
+      actions={slotActions}
+      clockInIso={clockInIso}
+      clockOutIso={clockOutIso}
+      i18n={i18n}
+      now={now}
+      onPunch={onPunch}
+      punchBusy={punchBusy}
+      slot={slot}
+      t={t}
+    />
   );
 }
 

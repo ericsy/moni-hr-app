@@ -45,23 +45,82 @@ function looksLikeFieldJob(raw: Record<string, unknown>): boolean {
   return !!(raw.customerName || raw.customer_name || raw.serviceAddress || raw.service_address);
 }
 
-function mapFieldJob(raw: Record<string, unknown>): TimelineFieldJobItem {
+function pickString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const s = asString(value).trim();
+    if (s) return s;
+  }
+  return undefined;
+}
+
+function mergeFieldJobFields(target: Record<string, unknown>, source: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    target[key] = value;
+  }
+  return target;
+}
+
+function absorbFieldJobRaw(byId: Map<string, Record<string, unknown>>, raw: Record<string, unknown>) {
+  const type = normalizeItemType(raw);
+  const isJob = isFieldJobType(type) || looksLikeFieldJob(raw);
+  if (!isJob) return;
+  const id = asString(raw.id || raw.jobId || raw.job_id).trim();
+  if (!id) return;
+  const prev = byId.get(id);
+  byId.set(id, prev ? mergeFieldJobFields({ ...prev }, raw) : { ...raw });
+}
+
+function collectFieldJobRaws(source: Record<string, unknown>): Map<string, Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  const walk = (items: unknown) => {
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      const rec = asRecord(item);
+      absorbFieldJobRaw(byId, rec);
+      const nested = rec.fieldJobs ?? rec.field_jobs;
+      if (Array.isArray(nested)) {
+        for (const child of nested) absorbFieldJobRaw(byId, asRecord(child));
+      }
+    }
+  };
+  walk(source.timeline ?? source.items ?? source.events);
+  walk(source.fieldJobs ?? source.field_jobs);
+  return byId;
+}
+
+function mapFieldJob(
+  raw: Record<string, unknown>,
+  mergedById?: Map<string, Record<string, unknown>>,
+  linkedStoreShiftId?: string,
+): TimelineFieldJobItem {
+  const id = asString(raw.id || raw.jobId || raw.job_id).trim();
+  const merged =
+    id && mergedById?.has(id)
+      ? mergeFieldJobFields({ ...mergedById.get(id)! }, raw)
+      : raw;
+  const linked =
+    linkedStoreShiftId ||
+    pickString(merged.linkedStoreShiftId, merged.linked_store_shift_id);
   return {
-    type: 'field_job',
-    id: asString(raw.id || raw.jobId || raw.job_id),
-    start: asString(raw.start || raw.startTime || raw.start_time),
-    end: asString(raw.end || raw.endTime || raw.end_time),
-    customerName: asString(raw.customerName || raw.customer_name),
-    customerPhone: asString(raw.customerPhone || raw.customer_phone) || undefined,
-    serviceAddress: asString(raw.serviceAddress || raw.service_address),
-    serviceType: asString(raw.serviceType || raw.service_type),
-    latitude: asNumber(raw.latitude),
-    longitude: asNumber(raw.longitude),
-    geofenceRadius: asNumber(raw.geofenceRadius ?? raw.geofence_radius, 100),
-    syncStoreClockIn: asBool(raw.syncStoreClockIn ?? raw.sync_store_clock_in),
-    syncStoreClockOut: asBool(raw.syncStoreClockOut ?? raw.sync_store_clock_out),
-    fieldClockInAt: asString(raw.fieldClockInAt || raw.field_clock_in_at) || null,
-    fieldClockOutAt: asString(raw.fieldClockOutAt || raw.field_clock_out_at) || null,
+    type: 'field_job' as const,
+    id: asString(merged.id || merged.jobId || merged.job_id),
+    start: asString(merged.start || merged.startTime || merged.start_time),
+    end: asString(merged.end || merged.endTime || merged.end_time),
+    customerName: asString(merged.customerName || merged.customer_name),
+    customerPhone: pickString(merged.customerPhone, merged.customer_phone),
+    serviceAddress: asString(merged.serviceAddress || merged.service_address),
+    serviceType: pickString(merged.serviceType, merged.service_type),
+    notes: pickString(merged.notes, merged.note, merged.remark, merged.remarks, merged.description),
+    latitude: asNumber(merged.latitude),
+    longitude: asNumber(merged.longitude),
+    geofenceRadius: asNumber(merged.geofenceRadius ?? merged.geofence_radius, 100),
+    syncStoreClockIn: asBool(merged.syncStoreClockIn ?? merged.sync_store_clock_in),
+    syncStoreClockOut: asBool(merged.syncStoreClockOut ?? merged.sync_store_clock_out),
+    linkedStoreShiftId: linked,
+    fieldClockInAt: asString(merged.fieldClockInAt || merged.field_clock_in_at) || null,
+    fieldClockOutAt: asString(merged.fieldClockOutAt || merged.field_clock_out_at) || null,
   };
 }
 
@@ -84,15 +143,20 @@ function mapStoreShift(raw: Record<string, unknown>): TimelineStoreShiftItem {
   };
 }
 
-function appendNestedFieldJobs(timeline: TodayWorkTimelineItem[], raw: Record<string, unknown>) {
+function appendNestedFieldJobs(
+  timeline: TodayWorkTimelineItem[],
+  raw: Record<string, unknown>,
+  mergedById: Map<string, Record<string, unknown>>,
+) {
   const nested = raw.fieldJobs ?? raw.field_jobs;
   if (!Array.isArray(nested)) return;
   for (const item of nested) {
-    timeline.push(mapFieldJob(asRecord(item)));
+    timeline.push(mapFieldJob(asRecord(item), mergedById));
   }
 }
 
 function buildTimeline(source: Record<string, unknown>): TodayWorkTimelineItem[] {
+  const mergedById = collectFieldJobRaws(source);
   const timeline: TodayWorkTimelineItem[] = [];
   const rawTimeline = source.timeline ?? source.items ?? source.events;
 
@@ -100,18 +164,30 @@ function buildTimeline(source: Record<string, unknown>): TodayWorkTimelineItem[]
     for (const item of rawTimeline) {
       const rec = asRecord(item);
       if (looksLikeFieldJob(rec)) {
-        timeline.push(mapFieldJob(rec));
+        timeline.push(mapFieldJob(rec, mergedById));
         continue;
       }
       timeline.push(mapStoreShift(rec));
-      appendNestedFieldJobs(timeline, rec);
+      appendNestedFieldJobs(timeline, rec, mergedById);
     }
   }
 
   const extra = source.fieldJobs ?? source.field_jobs;
   if (Array.isArray(extra)) {
     for (const item of extra) {
-      timeline.push(mapFieldJob(asRecord(item)));
+      timeline.push(mapFieldJob(asRecord(item), mergedById));
+    }
+  }
+
+  const idsInTimeline = new Set(
+    timeline
+      .filter((item): item is TimelineFieldJobItem => item.type === 'field_job')
+      .map((item) => item.id)
+      .filter(Boolean),
+  );
+  for (const [id, raw] of mergedById) {
+    if (!idsInTimeline.has(id)) {
+      timeline.push(mapFieldJob(raw, mergedById));
     }
   }
 

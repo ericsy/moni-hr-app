@@ -35,11 +35,14 @@ export interface TimelineFieldJobItem {
   customerPhone?: string;
   serviceAddress: string;
   serviceType?: string;
+  notes?: string;
   latitude: number;
   longitude: number;
   geofenceRadius: number;
   syncStoreClockIn: boolean;
   syncStoreClockOut: boolean;
+  /** 后端 timeline 嵌套挂载的店班 published cell id */
+  linkedStoreShiftId?: string;
   fieldClockInAt?: string | null;
   fieldClockOutAt?: string | null;
 }

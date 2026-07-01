@@ -8,6 +8,7 @@ import type {
   TodayWorkTimelineItem,
 } from '../../types/fieldService';
 import { colors } from '../../theme/colors';
+import { StoreShiftIcon } from '../icons/StoreShiftIcon';
 import { formatPunchHm } from '../../utils/formatPunchTime';
 
 type TimelineGroup = {
@@ -65,7 +66,7 @@ export function TodayWorkTimeline({ timeline }: Props) {
             {store ? (
               <View style={styles.storeHead}>
                 <View style={styles.storeTitleRow}>
-                  <Ionicons color={colors.store} name="business-outline" size={16} />
+                  <StoreShiftIcon color={colors.store} size={16} />
                   <Text style={styles.storeName} numberOfLines={1}>
                     {store.storeName || t('todayTimelineStoreShift')}
                   </Text>

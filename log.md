@@ -2,7 +2,147 @@
 
 ## 2026-06-29
 
-- **外勤漏打卡 · 商家端 Web（moni-hr-merchant）**：
+- **外勤上班后 Hero 不误显已完成**：外勤已打上班、未到计划结束前，Hero 显示「服务中」而非「已完成」（不依赖后端是否为 `DONE`）。
+  - **`SchedulePunchHeroCard`**：`shouldShowFieldHeroInService` 优先于 `DONE` 分支。
+  - 后端 **`AppTodayWorkService`**：服务中外勤返回 `WAITING` / 「服务中」。
+
+## 2026-06-29
+
+- **Hero 仅跟打卡时段**：不再展示漏打卡审批/申请入口；只根据 `currentPunchAction`、实打卡与计划时段显示该打什么卡（外勤「服务中」亦仅看实打卡+时间）。
+  - 移除 **`findFieldJobForHeroAttention`**；**`SchedulePunchHeroCard`** 去掉漏打卡 Hero 分支。
+  - **`shouldShowFieldHeroInService`** / **`fieldBlocksHeroStoreClockOut`** 不再读申请列表。
+
+## 2026-06-29
+
+- **外勤漏打卡部分通过状态**：仅一种漏打卡通过时不再显示「漏打卡已通过」，改为「漏打卡部分通过」或「漏打卡审批中」；两种均满足后才显示已通过/已完成。
+  - **`fieldMissedPunchEligibility.ts`**：`fieldPunchKindSatisfied` / `isFieldJobFullyPunched` / `missed_punch_partial`。
+  - **`FieldJobRow`**、**`SchedulePunchHeroCard`**、**`fieldJobsSchedule`** 同步。
+
+## 2026-06-29
+
+- **外勤下班漏打卡独立申请**：申请下班漏打卡不再要求已打上班卡或已申请上班漏打卡（后端同步移除校验）。
+  - **`request-create.tsx`**：提交时按 `canApplyFieldMissedPunchIn/Out` 分别校验。
+
+## 2026-06-29
+
+- **外勤漏打卡申请页禁用已申请类型**：已提交上班漏打卡后，申请页「上班」选项置灰不可选（下班同理）；进入页面自动切到仍可申请的类型。
+  - **`request-create.tsx`**：`fieldMissedPunchIn/OutSelectable` 与店班漏打卡一致的 chip 禁用样式。
+
+## 2026-06-29
+
+- **外勤漏打卡可分别申请上下班**：缺几张卡就可提交几个申请；上班漏打卡待审后仍可申请下班漏打卡。
+  - **`fieldMissedPunchEligibility.ts`**：`canApplyFieldMissedPunchIn/Out` 按打卡类型独立判断，下班不再要求已打上班卡。
+  - **`FieldJobRow`** / **`SchedulePunchHeroCard`**：同步使用 `preferredFieldMissedPunchKind`。
+
+## 2026-06-29
+
+- **外勤漏打卡切换上下班时间**：切换上班/下班打卡时，「实际打卡时间」默认同步为外勤计划开始/结束时刻。
+  - **`request-create.tsx`**：外勤模式无 `selectedSlot`，补全 `proposedTime` 随 `punchKind` 更新逻辑。
+
+## 2026-06-29
+
+- **已完成外勤仍显示在列表**：外勤打满卡后不再从今日班次列表消失。
+  - **`mapTodayWorkSummary.ts`**：嵌套 `fieldJobs` 展平时记录 `linkedStoreShiftId`；合并去重后补全遗漏外勤。
+  - **`fieldJobsSchedule.ts`**：优先按后端嵌套关系挂载；店班不在排班列表时外勤改独立展示。
+  - **`schedule.tsx`**：用 `allFieldJobs` 统计外勤数量。
+
+## 2026-06-29
+
+- **无排班不误显 Hero**：当日列表无外勤、无店班时，不再展示「等待可执行打卡动作」；仅在后端仍有可打卡动作时显示 Hero。
+  - **`schedule.tsx`**：`hasVisibleTodayWork` 门控 `showHeroCard`。
+  - 后端兜底改为 **「今日暂无待打卡任务 / 已完成」**。
+
+## 2026-06-29
+
+- **外勤已过打卡窗口 Hero 修复**：12:00–13:00 外勤在 16:00 不再误显「等待外勤任务可打卡时间」。
+  - 仅**尚未到可打卡时间**的外勤才显示该等待文案。
+  - 已过窗口未打满卡 → Hero 显示「打卡不完整」+「外勤服务」+ 漏打卡入口。
+  - 店班已上班 → 优先显示店班「已打卡」。
+  - **`findFieldJobForHeroAttention`**、后端 **`AppTodayWorkService`** 同步调整。
+
+## 2026-06-29
+
+- **店班 Logo**：新增 `StoreShiftIcon`（门店 + 班次时钟 SVG），Hero / 今日班次行 / 时间线店班头统一使用；外勤仍用 `car-outline`。
+  - 依赖 **`react-native-svg`**。
+
+## 2026-06-29
+
+- **已打卡 Hero**：恢复「距离下班 X 分钟」倒计时；仍不展示时段/打卡时刻，店班仅显示区域 · 班次名称。
+
+## 2026-06-29
+
+- **已打卡 Hero 文案**：不再展示时间；店班显示「区域 · 班次名称」，外勤显示「外勤服务」。
+  - **`formatShiftHeroName`** 替代含时段的 `formatShiftHeroLabel`。
+
+## 2026-06-29
+
+- **已打卡 Hero 增强**：上班打卡后展示当前班次（区域 · 班次 · 时段）及距离下班倒计时；无法计算倒计时时显示计划下班时间。
+  - **`scheduleHeroShift.ts`**：`minutesUntilShiftEnd`、`formatShiftHeroLabel`。
+  - **`SchedulePunchHeroCard`**、i18n **`minutesUntilShiftEnd`**。
+
+## 2026-06-29
+
+- **店班已上班 Hero 修复**：已打上班卡、尚未到下班时间时，不再被「等待外勤任务可打卡时间」覆盖，Hero 显示「已打卡」及上班时间。
+  - **`SchedulePunchHeroCard`**：`clocked_in` 态优先于通用 `WAITING`。
+  - 后端 **`AppTodayWorkService`**：店班进行中时返回「已打卡 / 下班时间后可打下班卡」。
+
+## 2026-06-29
+
+- **打卡优先级统一为「下班先于上班」**（Hero 展示 + 点击逻辑 + 后端 `currentPunchAction`）：
+  - 顺序：店班下班 → 外勤完成 → 外勤开始 → 店班上班。
+  - **`workPunch.ts`**：`isClockOutWorkAction` / `isClockInWorkAction`；外勤「服务中」才挡店班下班，外勤上班不再挡。
+  - **`SchedulePunchHeroCard`** / **`schedule.tsx`**：展示与 `onHeroPunch` 按上述顺序分支。
+  - 后端 **`AppTodayWorkService.determineCurrentAction`** 同步调整。
+
+## 2026-06-29
+
+- **Hero 下班打卡误打上班修复**：界面显示「离店下班」时，点击不再误走后端下一班 `STORE_CLOCK_IN`；当前班可下班时优先调用店班 `clock_out` 接口。
+  - **`schedule.tsx`**：`onHeroPunch` 与 Hero 展示逻辑对齐。
+  - **`workPunch.ts`**：抽取 `fieldBlocksHeroStoreClockOut` 共用判断。
+
+## 2026-06-29
+
+- **Hero 店班下班优先级**：外勤结束与下一班开始同一时刻时，优先展示当前班「离店下班」而非下一班「到店上班」。
+  - 后端 **`AppTodayWorkService.determineCurrentAction`**：外勤打卡 → 店班下班 → 店班上班。
+  - App **`SchedulePunchHeroCard`**：`showClockOut` 时优先于 `STORE_CLOCK_IN` 与通用 `WAITING`；`WAITING` 且无进行中外勤时回退店班 Hero。
+  - **`schedule.tsx`**：移除重复的 `workDateIso` 属性。
+
+## 2026-06-29
+
+- **外勤详情弹窗数据修复**：合并 timeline 多处外勤字段避免服务类型/备注丢失；服务类型本地化改用 `returnObjects`；弹窗增加「同步店班」配置展示。
+  - **`mapTodayWorkSummary.ts`**、**`fieldServiceType.ts`**、**`FieldJobRow.tsx`**、i18n。
+
+## 2026-06-29
+
+- **外勤拨号修复**：点击客户电话直接 `Linking.openURL(tel:)`，不再因 iOS `canOpenURL` 误报导致「无法拨打电话」；`app.json` 补充 `LSApplicationQueriesSchemes`。
+
+## 2026-06-29
+
+- **多外勤状态修复**：尚未到计划开始时间的外勤（第 2 单及以后）不再误显示「打卡不完整」，改为「未开始」。
+  - **`fieldMissedPunchEligibility.ts`**：新增 `isBeforeFieldScheduledStart`，修正 `getFieldJobDisplayState` 判断。
+
+## 2026-06-29
+
+- **独立外勤行 UI**：去掉列表外层「外勤服务」分组标题；卡片内图标右侧仍保留「外勤服务」标签。
+
+## 2026-06-29
+
+- **外勤与店班挂载规则**：外勤仅在与店班时段**重叠**时嵌套显示在店班下；时间不匹配的外勤独立展示（与后端 `fieldLinksToStoreShift` 一致）。
+  - **`fieldJobsSchedule.ts`**：`resolveFieldJobsForSchedule` 改为时段重叠判断，去除按时间线顺序挂靠逻辑。
+
+## 2026-06-29点击外勤卡片主区域（非电话/地址）弹出详情弹窗，展示服务类型与备注；后端 timeline 补充 `notes` 字段。
+  - 服务类型按 `fieldServiceTypes` 本地化（`cleaning` → 保洁 等），与商家端一致。
+  - **`FieldJobRow.tsx`**、**`fieldService.ts`**、**`mapTodayWorkSummary.ts`**、i18n。
+  - 后端 **`AppTodayWorkService.toFieldTimelineItem`** 增加 `notes`。
+
+## 2026-06-29外勤计划结束（如 15:50）后 Hero 不再误显示「服务中」。
+  - 修复 **`SchedulePunchHeroCard`** 参数重复（`workDateIso`）导致的打包语法错误。
+  - **`fieldMissedPunchEligibility.ts`**：新增 `isPastFieldScheduledEnd`、`isInFieldOutPunchWindow`、`shouldShowFieldHeroInService`。
+  - **`workPunch.ts`**：`resolveEffectiveWorkAction` 在结束~结束+30 分钟窗口内补全「完成服务」打卡动作。
+  - **`SchedulePunchHeroCard`**：超时显示「打卡不完整」+「申请漏打卡」；仅计划结束前显示「服务中」。
+  - **`schedule.tsx`**：Hero 接入上述逻辑与申请列表。
+
+## 2026-06-29
   - 申请列表/详情支持外勤漏打卡展示（客户、服务地址、计划时段、同步店班说明）；与 App 共用后端 `fieldJobId` + `missed_punch` 体系。
 
 - **外勤漏打卡（与店班漏打卡同一申请体系）**：
@@ -21,7 +161,7 @@
 
 - **外勤并入排班表（日/周）**：
   - 新增 **`src/utils/fieldJobsSchedule.ts`**、**`src/components/FieldJobRow.tsx`**，从 **`today-work-summary`** 拉取外勤工单并挂到对应门店班次下。
-  - 修复外勤不显示：**`resolveFieldJobsForSchedule()`** 处理班次 id 不一致与加载竞态；**`mapTodayWorkSummary`** 兼容更多后端字段/嵌套结构。
+  - **`resolveFieldJobsForSchedule()`** 改为按外勤与店班**时段重叠**挂载，时间不重叠的外勤独立展示，不再套在相邻店班下。
   - **`schedule.tsx`** 今日班次列表展示外勤行（嵌套在班次下或独立显示）。
   - **`schedule-week.tsx`** 周视图同步展示外勤；日期圆点在有外勤时也会标记。
 

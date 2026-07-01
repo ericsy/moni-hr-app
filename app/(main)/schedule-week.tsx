@@ -325,13 +325,13 @@ export default function ScheduleWeekScreen() {
     const map: Record<string, TimelineFieldJobItem[]> = {};
     for (const [date, timeline] of Object.entries(fieldTimelineByDate)) {
       const shifts = myShiftsByDate[date] ?? [];
-      const resolved = resolveFieldJobsForSchedule(shifts, timeline);
+      const resolved = resolveFieldJobsForSchedule(shifts, timeline, date);
       map[date] = resolved.allFieldJobs;
     }
     return map;
   }, [fieldTimelineByDate, myShiftsByDate]);
   const selectedFieldResolved = useMemo(
-    () => resolveFieldJobsForSchedule(myShifts, fieldTimelineByDate[selected] ?? []),
+    () => resolveFieldJobsForSchedule(myShifts, fieldTimelineByDate[selected] ?? [], selected),
     [myShifts, fieldTimelineByDate, selected],
   );
   const selectedFieldGroups = {
@@ -764,9 +764,6 @@ export default function ScheduleWeekScreen() {
             })}
             {selectedFieldGroups.standalone.length > 0 ? (
               <View style={styles.fieldJobsSection}>
-                {myShifts.length > 0 ? (
-                  <Text style={styles.fieldJobsSectionTitle}>{t('scheduleFieldJobsTitle')}</Text>
-                ) : null}
                 {selectedFieldGroups.standalone.map((job) => (
                   <FieldJobRow key={job.id || `standalone-${job.start}`} job={job} />
                 ))}

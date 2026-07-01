@@ -1,8 +1,10 @@
 import * as Location from 'expo-location';
 
 import { postWorkPunch } from '../api/todayWork';
-import type { CurrentPunchAction, EmployeePunchPayload, TodayWorkSummary } from '../types/fieldService';
+import type { CurrentPunchAction, EmployeePunchPayload, TodayWorkSummary, TimelineFieldJobItem } from '../types/fieldService';
+import { isInFieldOutPunchWindow, shouldShowFieldHeroInService } from './fieldMissedPunchEligibility';
 import { getPunchDevicePayload } from './punchDevice';
+import { getApproximateServerNowDate } from './serverClock';
 
 export function mapActionToPunchType(
   action: CurrentPunchAction['action'],
@@ -22,6 +24,22 @@ export function isFieldWorkPunchAction(action: CurrentPunchAction['action']): bo
     action === 'FIELD_CLOCK_IN_SYNC_STORE' ||
     action === 'FIELD_CLOCK_OUT' ||
     action === 'FIELD_CLOCK_OUT_SYNC_STORE'
+  );
+}
+
+export function isClockOutWorkAction(action: CurrentPunchAction['action']): boolean {
+  return (
+    action === 'STORE_CLOCK_OUT' ||
+    action === 'FIELD_CLOCK_OUT' ||
+    action === 'FIELD_CLOCK_OUT_SYNC_STORE'
+  );
+}
+
+export function isClockInWorkAction(action: CurrentPunchAction['action']): boolean {
+  return (
+    action === 'STORE_CLOCK_IN' ||
+    action === 'FIELD_CLOCK_IN' ||
+    action === 'FIELD_CLOCK_IN_SYNC_STORE'
   );
 }
 
@@ -49,6 +67,39 @@ export function workPunchTitleKey(action: CurrentPunchAction): string | null {
   if (action.buttonLabel) return null;
   const key = actionLabelKey[action.action];
   return key ?? 'todayActionUnknown';
+}
+
+/** 后端返回 WAITING 但已到外勤完成打卡窗口时，客户端补全可打卡动作 */
+export function resolveEffectiveWorkAction(
+  workAction: CurrentPunchAction | undefined,
+  activeFieldJob: TimelineFieldJobItem | undefined,
+  now: Date = getApproximateServerNowDate(),
+): CurrentPunchAction | undefined {
+  if (!workAction || !activeFieldJob) return workAction;
+  if (workAction.action !== 'WAITING') return workAction;
+  if (!activeFieldJob.fieldClockInAt || activeFieldJob.fieldClockOutAt) return workAction;
+  if (!isInFieldOutPunchWindow(activeFieldJob, now)) return workAction;
+
+  const sync = activeFieldJob.syncStoreClockOut;
+  return {
+    action: sync ? 'FIELD_CLOCK_OUT_SYNC_STORE' : 'FIELD_CLOCK_OUT',
+    refType: 'field_job',
+    refId: activeFieldJob.id,
+    hint: '请在客户地址附近完成服务',
+    buttonLabel: sync ? '完成服务（今日下班）' : '完成服务',
+    geofence: null,
+  };
+}
+
+/** 外勤「服务中」是否应挡住店班「离店下班」（仅实打卡 + 时段） */
+export function fieldBlocksHeroStoreClockOut(params: {
+  activeFieldJob?: TimelineFieldJobItem;
+  now?: Date;
+}): boolean {
+  const now = params.now ?? getApproximateServerNowDate();
+  return !!(
+    params.activeFieldJob && shouldShowFieldHeroInService(params.activeFieldJob, now)
+  );
 }
 
 export async function executeWorkPunch(params: {
