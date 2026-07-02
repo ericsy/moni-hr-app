@@ -28,6 +28,13 @@ import { colors } from '../../src/theme/colors';
 import { calendarDateKey } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate, formatPunchHm } from '../../src/utils/formatPunchTime';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
+import { formatShiftHeroName } from '../../src/utils/scheduleHeroShift';
+import {
+  formatFieldJobPunchTitle,
+  formatPunchTaskTypeLabel,
+  isFieldJobPunchGroup,
+  isLikelyFieldJobPunch,
+} from '../../src/utils/punchTaskType';
 
 function addDays(d: Date, n: number) {
   const x = new Date(d);
@@ -92,7 +99,7 @@ export default function PunchRecordsScreen() {
 
   const shiftGroups = useMemo(
     () => buildShiftPunchGroups(daySlots, punches, selected),
-    [daySlots, punches],
+    [daySlots, punches, selected],
   );
 
   const hasAnyContent = shiftGroups.length > 0;
@@ -194,18 +201,24 @@ export default function PunchRecordsScreen() {
     }
 
     const timeStr = formatPunchHm(punch.punchedAt, i18n.language);
+    const taskLabel = formatPunchTaskTypeLabel(punch, t);
 
     return (
       <View style={[styles.punchRow, styles.punchRowDone]}>
-        <View style={[styles.typePill, isIn ? styles.typePillInDone : styles.typePillOutDone]}>
-          <Ionicons
-            color={isIn ? colors.primaryDark : colors.success}
-            name={isIn ? 'log-in-outline' : 'log-out-outline'}
-            size={16}
-          />
-          <Text style={[styles.typePillText, isIn ? styles.typePillTextInDone : styles.typePillTextOutDone]}>
-            {isIn ? t('clockIn') : t('clockOut')}
-          </Text>
+        <View style={styles.punchRowLeft}>
+          <View style={[styles.typePill, isIn ? styles.typePillInDone : styles.typePillOutDone]}>
+            <Ionicons
+              color={isIn ? colors.primaryDark : colors.success}
+              name={isIn ? 'log-in-outline' : 'log-out-outline'}
+              size={16}
+            />
+            <Text style={[styles.typePillText, isIn ? styles.typePillTextInDone : styles.typePillTextOutDone]}>
+              {isIn ? t('clockIn') : t('clockOut')}
+            </Text>
+          </View>
+          <View style={styles.taskPill}>
+            <Text style={styles.taskPillText}>{taskLabel}</Text>
+          </View>
         </View>
         <View style={styles.punchRowRight}>
           <Text style={[styles.timeText, !isIn && styles.timeTextOutDone]}>{timeStr}</Text>
@@ -216,15 +229,38 @@ export default function PunchRecordsScreen() {
 
   const renderShiftGroup = ({ item }: { item: ShiftPunchGroup }) => {
     const slot = item.slot;
-    const title = slot
-      ? `${slot.areaName} · ${slot.shiftName}`
-      : t('punchRecordsShiftUnknown', { id: item.scheduleId });
-    const range = slot?.range ?? '';
+    const anchorPunch = item.clockIn ?? item.clockOut ?? item.extra[0] ?? null;
+    const isFieldGroup =
+      isFieldJobPunchGroup(item.shiftKey) || (anchorPunch != null && isLikelyFieldJobPunch(anchorPunch));
+    const fieldRange =
+      anchorPunch?.shiftStartTime && anchorPunch?.shiftEndTime
+        ? `${anchorPunch.shiftStartTime.slice(0, 5)}–${anchorPunch.shiftEndTime.slice(0, 5)}`
+        : '';
+    const unknownShiftId =
+      item.scheduleId && item.scheduleId !== 'undefined' && item.scheduleId !== '0'
+        ? item.scheduleId
+        : '—';
+    const title = isFieldGroup
+      ? formatFieldJobPunchTitle(anchorPunch, t)
+      : slot
+        ? formatShiftHeroName(slot)
+        : anchorPunch?.areaName?.trim() || anchorPunch?.shiftName?.trim()
+          ? formatShiftHeroName({
+              areaName: anchorPunch.areaName?.trim() || '—',
+              shiftName: anchorPunch.shiftName?.trim() || '—',
+            })
+          : t('punchRecordsShiftUnknown', { id: unknownShiftId });
+    const range = isFieldGroup ? fieldRange : slot?.range ?? fieldRange;
 
     return (
-      <View style={styles.shiftCard}>
+      <View style={[styles.shiftCard, isFieldGroup && styles.shiftCardField]}>
         <View style={styles.shiftHead}>
-          <Text style={styles.shiftTitle}>{title}</Text>
+          <View style={styles.shiftTitleRow}>
+            {isFieldGroup ? (
+              <Ionicons color={colors.primary} name="car-outline" size={18} style={styles.shiftKindIcon} />
+            ) : null}
+            <Text style={styles.shiftTitle}>{title}</Text>
+          </View>
           {range ? <Text style={styles.shiftRange}>{range}</Text> : null}
         </View>
         <View style={styles.punchBlock}>
@@ -394,8 +430,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  shiftCardField: {
+    borderColor: '#BFDBFE',
+    backgroundColor: '#F8FBFF',
+  },
   shiftHead: { marginBottom: 10 },
-  shiftTitle: { fontSize: 15, fontWeight: '800', color: colors.text },
+  shiftTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  shiftKindIcon: { marginTop: 1 },
+  shiftTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: colors.text },
   shiftRange: { marginTop: 4, fontSize: 18, fontWeight: '800', color: colors.primaryDark, fontVariant: ['tabular-nums'] },
   punchBlock: {
     borderRadius: 12,
@@ -412,16 +454,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
+  punchRowLeft: { flex: 1, gap: 8 },
   punchDivider: { height: 1, backgroundColor: colors.border, marginHorizontal: 12 },
-  punchRowRight: { flex: 1, alignItems: 'flex-end', gap: 4 },
+  punchRowRight: { alignItems: 'flex-end', justifyContent: 'center' },
   typePill: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'flex-start',
     gap: 5,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 8,
   },
+  taskPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+  },
+  taskPillText: { fontSize: 11, fontWeight: '700', color: '#4338CA' },
   punchRowDone: { backgroundColor: '#FAFCFF' },
   typePillInDone: { backgroundColor: colors.primarySoft },
   typePillOutDone: { backgroundColor: '#D1FAE5' },

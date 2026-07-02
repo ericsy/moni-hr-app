@@ -8,6 +8,59 @@ import {
   scheduledRangeFromPunch,
 } from '../utils/shiftIdentity';
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function asString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const s = String(value).trim();
+  return s || undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function asBool(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  return fallback;
+}
+
+/** 映射单日打卡列表项（含 refType / syncEffect / 外勤客户名） */
+export function mapClockPunchResults(rows: unknown[]): AppClockPunchResult[] {
+  return rows.map((raw) => {
+    const row = asRecord(raw);
+    const shared = row.proxySharedDeviceOtherMerchantAdminIds ?? row.proxy_shared_device_other_merchant_admin_ids;
+    return {
+      id: asNumber(row.id) ?? 0,
+      publishedCellId: asNumber(row.publishedCellId ?? row.published_cell_id) ?? 0,
+      punchType: asString(row.punchType ?? row.punch_type) ?? '',
+      withinGeofence: asBool(row.withinGeofence ?? row.within_geofence),
+      distanceMeters: asNumber(row.distanceMeters ?? row.distance_meters) ?? 0,
+      punchedAt: asString(row.punchedAt ?? row.punched_at) ?? '',
+      scheduleDate: asString(row.scheduleDate ?? row.schedule_date) ?? null,
+      shiftStartTime: asString(row.shiftStartTime ?? row.shift_start_time) ?? null,
+      shiftEndTime: asString(row.shiftEndTime ?? row.shift_end_time) ?? null,
+      areaName: asString(row.areaName ?? row.area_name) ?? null,
+      shiftName: asString(row.shiftName ?? row.shift_name) ?? null,
+      suspectedProxyPunch: asBool(row.suspectedProxyPunch ?? row.suspected_proxy_punch),
+      proxyPunchReason: asString(row.proxyPunchReason ?? row.proxy_punch_reason) ?? null,
+      proxySharedDeviceOtherMerchantAdminIds: Array.isArray(shared)
+        ? shared.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+        : null,
+      punchSource: asString(row.punchSource ?? row.punch_source) ?? null,
+      refType: asString(row.refType ?? row.ref_type) ?? null,
+      refId: asNumber(row.refId ?? row.ref_id) ?? null,
+      syncEffect: asString(row.syncEffect ?? row.sync_effect) ?? null,
+      customerName: asString(row.customerName ?? row.customer_name) ?? null,
+    };
+  });
+}
+
 function normalizePunchType(punchType: string): string {
   return punchType.trim().toLowerCase().replace(/-/g, '_');
 }

@@ -169,6 +169,14 @@ export type AppClockPunchResult = {
   suspectedProxyPunch?: boolean;
   proxyPunchReason?: string | null;
   proxySharedDeviceOtherMerchantAdminIds?: number[] | null;
+  punchSource?: string | null;
+  /** store_shift / field_job */
+  refType?: 'store_shift' | 'field_job' | string | null;
+  refId?: number | null;
+  /** none / store_clock_in / store_clock_out */
+  syncEffect?: 'none' | 'store_clock_in' | 'store_clock_out' | string | null;
+  /** 外勤客户名（仅 field_job） */
+  customerName?: string | null;
 };
 
 /** GET /api/v1/app/clock/punches?date=yyyy-MM-dd */

@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import { mapClockPunchResults } from './mapClockPunches';
 import type { AppClockPunchRequest, AppClockPunchResult, AppClockPunchesByDay } from './types';
 
 export function postClockPunch(params: { storeId: string | number; body: AppClockPunchRequest }) {
@@ -6,7 +7,7 @@ export function postClockPunch(params: { storeId: string | number; body: AppCloc
     method: 'POST',
     storeId: params.storeId,
     body: params.body,
-  });
+  }).then((row) => mapClockPunchResults([row])[0]);
 }
 
 /** 按天查询当前员工在门店的打卡记录（date 为 yyyy-MM-dd，按门店打卡时区日历日筛选） */
@@ -14,5 +15,8 @@ export function fetchClockPunchesByDay(params: { storeId: string | number; date:
   const q = new URLSearchParams({ date: params.date });
   return apiRequest<AppClockPunchesByDay>(`/api/v1/app/clock/punches?${q.toString()}`, {
     storeId: params.storeId,
-  });
+  }).then((data) => ({
+    ...data,
+    punches: mapClockPunchResults(data.punches ?? []),
+  }));
 }

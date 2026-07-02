@@ -2,6 +2,24 @@
 
 ## 2026-07-02
 
+- **打卡记录按任务时间排序**：`buildShiftPunchGroups` 在聚合店班与外勤后，按任务计划开始时刻统一排序；**开始时间相同时店班优先于外勤**。
+
+## 2026-07-02（疑似代打卡）
+
+- 员工 App 无代打卡规则逻辑；疑似代打卡规则在后端 **`moni-hr`** 调整（移除 `new_device_id`）。
+
+## 2026-07-02（外勤标题等）
+
+- **修复外勤打卡记录标题显示「班次#undefined」**：
+  - **`groupPunchesByShift.ts`**：外勤统一按 `field_job:` 分组（无 refId 时用时段或 punch id）；`scheduleId` 不再对 `publishedCellId` 做 `String(undefined)`。
+  - **`punchTaskType.ts`**：`isLikelyFieldJobPunch`、`formatFieldJobPunchTitle`；`publishedCellId` 判断改为 `> 0`。
+  - **`punch-records.tsx`**：标题优先识别外勤，显示客户名/服务类型/「外勤服务」。
+
+- **打卡记录展示任务类型**：每条打卡显示任务类型标签（店班 / 外勤 / 外勤同步上下班）。
+  - 依赖后端 **`AppClockPunchVo`** 返回 `refType`、`refId`、`syncEffect`、`customerName`。
+  - App **`mapClockPunchResults`**、**`punchTaskType.ts`**、**`punch-records.tsx`**；外勤按 `field_job:refId` 独立分组。
+  - **修复显示 `undefined`**：店班标题用 `formatShiftHeroName`；任务类型文案兜底；兼容未返回 `refType` 的外勤打卡。
+
 - **外勤同步店班 1 小时窗口规则**（规则在后端 `FieldStoreSyncRules` + 商家端实现；员工 App 无逻辑变更）：
   - 同步上班：外勤开始须在店班开始 **之后 1 小时内**（含边界）。
   - 同步下班：外勤结束须在店班结束 **之前 1 小时内**（含边界）。
