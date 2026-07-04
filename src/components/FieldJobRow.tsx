@@ -49,6 +49,20 @@ function badgeForState(state: FieldJobDisplayState) {
       return { bg: '#FEF3C7', text: '#B45309', icon: 'alert-circle-outline' as const, key: 'fieldJobBadgeMissedPartial' };
     case 'missed_punch_approved':
       return { bg: '#D1FAE5', text: '#047857', icon: 'checkmark-circle-outline' as const, key: 'fieldJobBadgeMissedApproved' };
+    case 'leave_pending':
+      return {
+        bg: '#FEF3C7',
+        text: '#B45309',
+        icon: 'hourglass-outline' as const,
+        key: 'fieldJobBadgeLeavePending',
+      };
+    case 'leave_approved':
+      return {
+        bg: '#E0E7FF',
+        text: '#4338CA',
+        icon: 'calendar-outline' as const,
+        key: 'fieldJobBadgeLeaveApproved',
+      };
     case 'not_started':
     default:
       return { bg: '#F1F5F9', text: colors.textMuted, icon: 'ellipse-outline' as const, key: 'fieldJobBadgeNotStarted' };
@@ -202,6 +216,9 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
             ) : null}
             {displayState === 'missed_punch_pending' ? (
               <Text style={styles.hintText}>{t('fieldJobMissedPendingHint')}</Text>
+            ) : null}
+            {displayState === 'leave_approved' ? (
+              <Text style={styles.hintText}>{t('fieldJobLeaveApprovedHint')}</Text>
             ) : null}
           </View>
         </View>

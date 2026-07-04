@@ -1,6 +1,11 @@
 import type { LeaveRequest } from '../context/AuthContext';
 import type { TimelineFieldJobItem } from '../types/fieldService';
 import { calendarDateKey, normalizeDateKey } from './calendarDateKey';
+import {
+  findApprovedLeaveCoveringFieldJob,
+  findLeaveCoveringFieldJob,
+  findPendingLeaveCoveringFieldJob,
+} from './fieldLeaveEligibility';
 import { compareDateKeys } from './localDateTime';
 import { getApproximateServerNowDate } from './serverClock';
 import { isMissedPunchRequestBlocking } from './missedPunchEligibility';
@@ -78,6 +83,7 @@ export function canApplyFieldMissedPunchIn(
   requests: LeaveRequest[] = [],
   now: Date = getApproximateServerNowDate(),
 ): boolean {
+  if (job.leaveApproved || findLeaveCoveringFieldJob(requests, job.id)) return false;
   if (job.fieldClockInAt) return false;
   if (findOpenFieldMissedPunchRequest(requests, job.id, 'in')) return false;
   return canApplyFieldMissedPunchKind(job, 'in', now, calendarDateKey(now));
@@ -89,6 +95,7 @@ export function canApplyFieldMissedPunchOut(
   requests: LeaveRequest[] = [],
   now: Date = getApproximateServerNowDate(),
 ): boolean {
+  if (job.leaveApproved || findLeaveCoveringFieldJob(requests, job.id)) return false;
   if (job.fieldClockOutAt) return false;
   if (findOpenFieldMissedPunchRequest(requests, job.id, 'out')) return false;
   return canApplyFieldMissedPunchKind(job, 'out', now, calendarDateKey(now));
@@ -199,13 +206,22 @@ export type FieldJobDisplayState =
   | 'incomplete'
   | 'missed_punch_pending'
   | 'missed_punch_partial'
-  | 'missed_punch_approved';
+  | 'missed_punch_approved'
+  | 'leave_pending'
+  | 'leave_approved';
 
 export function getFieldJobDisplayState(
   job: TimelineFieldJobItem,
   requests: LeaveRequest[],
   now: Date = getApproximateServerNowDate(),
 ): FieldJobDisplayState {
+  // 店班请假含此外勤 / 独立外勤请假：不应再显示「未开始」
+  if (job.leaveApproved || findApprovedLeaveCoveringFieldJob(requests, job.id)) {
+    return 'leave_approved';
+  }
+  if (findPendingLeaveCoveringFieldJob(requests, job.id)) {
+    return 'leave_pending';
+  }
   const hasIn = !!job.fieldClockInAt;
   const hasOut = !!job.fieldClockOutAt;
   if (hasIn && hasOut) return 'completed';
@@ -260,11 +276,12 @@ export function getFieldJobDisplayState(
   return 'not_started';
 }
 
-/** Hero「服务中」：已打外勤上班、未下班，且尚未到计划结束（仅看实打卡与时间） */
+/** Hero「服务中」：已打外勤上班、未下班，且尚未到计划结束（请假已通过的不参与 Hero） */
 export function shouldShowFieldHeroInService(
   job: TimelineFieldJobItem,
   now: Date = getApproximateServerNowDate(),
 ): boolean {
+  if (job.leaveApproved) return false;
   return !!job.fieldClockInAt && !job.fieldClockOutAt && !isPastFieldScheduledEnd(job, now);
 }
 

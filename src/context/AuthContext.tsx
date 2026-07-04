@@ -45,7 +45,7 @@ import {
   resetUnauthorizedGuard,
 } from '../api/client';
 import { mapEmployeeToUser } from '../api/mapEmployeeUser';
-import type { AppAccountLookupStatus } from '../api/types';
+import type { AppAccountLookupStatus, AppAttendanceFieldImpact } from '../api/types';
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../api/types';
 import { pickAccessToken } from '../api/types';
@@ -187,6 +187,8 @@ export type LeaveRequest = {
     syncStoreClockIn: boolean;
     syncStoreClockOut: boolean;
   };
+  /** 店班/按日期请假关联的外勤影响（用于占用外勤请假入口） */
+  fieldImpacts?: AppAttendanceFieldImpact[];
 };
 
 type Session = {

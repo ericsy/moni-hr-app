@@ -121,6 +121,9 @@ function mapFieldJob(
     linkedStoreShiftId: linked,
     fieldClockInAt: asString(merged.fieldClockInAt || merged.field_clock_in_at) || null,
     fieldClockOutAt: asString(merged.fieldClockOutAt || merged.field_clock_out_at) || null,
+    leaveApproved: asBool(
+      merged.leaveApproved ?? merged.leave_approved ?? merged.leaveApprovedFlag,
+    ),
   };
 }
 

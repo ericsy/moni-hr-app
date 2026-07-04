@@ -116,12 +116,15 @@ export function pickHeroShiftIndex(
   getPunch: PunchLookup,
   getPairPunch: PunchLookup,
   punchesKnown: boolean,
+  /** 整段请假的班次不参与 Hero 打卡 */
+  isShiftOnFullLeave?: (slot: MyPublishedShiftSlot) => boolean,
 ): number {
   if (slots.length === 0) return -1;
   const now = getApproximateServerNowDate();
 
   const score = (i: number): number => {
     const s = slots[i];
+    if (isShiftOnFullLeave?.(s)) return 99;
     const punch = getPunch(s);
     const pairPunch = getPairPunch(s);
     const actions = getShiftCardActions(
@@ -153,6 +156,8 @@ export function pickHeroShiftIndex(
       bestScore = s;
     }
   }
+  // 全部为请假/已完成时不选店班 Hero
+  if (bestScore >= 99) return -1;
   return best;
 }
 

@@ -33,6 +33,7 @@ import { calendarDateKey, normalizeDateKeyOrToday } from '../../../src/utils/cal
 import { formatSelectedHeaderLine } from '../../../src/utils/localeDateFormat';
 import {
   getShiftLeaveRequestStatus,
+  hasOpenFullLeaveForShift,
   isMissedPunchBlockedByLeave,
 } from '../../../src/utils/leaveRequestEligibility';
 import {
@@ -58,7 +59,7 @@ import {
   isClockInWorkAction,
   isClockOutWorkAction,
   isWorkPunchActionEnabled,
-  resolveEffectiveWorkAction,
+  resolveHeroWorkAction,
 } from '../../../src/utils/workPunch';
 
 function parseIsoToLocalDate(iso: string): Date {
@@ -232,15 +233,43 @@ export default function ScheduleScreen() {
         (s) => getShiftPunch(todayIso, s),
         getPairPunch,
         punchesKnown,
+        (s) => hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, s),
       ),
-    [todayShifts, todayIso, getShiftPunch, getPairPunch, punchesKnown, shiftPunches],
+    [
+      todayShifts,
+      todayIso,
+      getShiftPunch,
+      getPairPunch,
+      punchesKnown,
+      shiftPunches,
+      myAttendanceRequests,
+    ],
   );
 
   const heroSlot = heroIndex >= 0 ? todayShifts[heroIndex] : undefined;
   const activeFieldJob = useMemo(() => findActiveFieldJob(fieldTimeline), [fieldTimeline]);
+  const fieldJobsToday = useMemo(
+    () => fieldTimeline.filter((item): item is TimelineFieldJobItem => item.type === 'field_job'),
+    [fieldTimeline],
+  );
   const workAction = useMemo(
-    () => resolveEffectiveWorkAction(workSummary?.currentPunchAction, activeFieldJob),
-    [workSummary?.currentPunchAction, activeFieldJob],
+    () =>
+      resolveHeroWorkAction({
+        workAction: workSummary?.currentPunchAction,
+        activeFieldJob,
+        fieldJobs: fieldJobsToday,
+        storeShifts: todayShifts,
+        requests: myAttendanceRequests,
+        workDateIso: todayIso,
+      }),
+    [
+      workSummary?.currentPunchAction,
+      activeFieldJob,
+      fieldJobsToday,
+      todayShifts,
+      myAttendanceRequests,
+      todayIso,
+    ],
   );
   const hasVisibleTodayWork =
     todayShifts.length > 0 || totalFieldJobs > 0 || fieldTimeline.length > 0;
@@ -289,7 +318,14 @@ export default function ScheduleScreen() {
   );
 
   const onHeroPunch = useCallback(async () => {
-    const action = resolveEffectiveWorkAction(workSummary?.currentPunchAction, activeFieldJob);
+    const action = resolveHeroWorkAction({
+      workAction: workSummary?.currentPunchAction,
+      activeFieldJob,
+      fieldJobs: fieldJobsToday,
+      storeShifts: todayShifts,
+      requests: myAttendanceRequests,
+      workDateIso: todayIso,
+    });
     const now = getApproximateServerNowDate();
 
     const heroPunchBlocked = fieldBlocksHeroStoreClockOut({
@@ -297,7 +333,7 @@ export default function ScheduleScreen() {
       now,
     });
 
-    if (heroSlot) {
+    if (heroSlot && !hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, heroSlot)) {
       const punch = getShiftPunch(todayIso, heroSlot);
       const pairPunch = getPairPunch(heroSlot);
       const heroActions = getShiftCardActions(
@@ -357,10 +393,25 @@ export default function ScheduleScreen() {
       }
       return;
     }
-    if (heroSlot) {
+    if (heroSlot && !hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, heroSlot)) {
       await runPunch(heroSlot);
     }
-  }, [workSummary, activeFieldJob, selectedStoreId, loadTodayPunches, t, heroSlot, runPunch, getShiftPunch, getPairPunch, todayIso, punchesKnown, myAttendanceRequests]);
+  }, [
+    workSummary,
+    activeFieldJob,
+    fieldJobsToday,
+    todayShifts,
+    selectedStoreId,
+    loadTodayPunches,
+    t,
+    heroSlot,
+    runPunch,
+    getShiftPunch,
+    getPairPunch,
+    todayIso,
+    punchesKnown,
+    myAttendanceRequests,
+  ]);
 
   const refreshPageData = useCallback(async () => {
     await Promise.all([

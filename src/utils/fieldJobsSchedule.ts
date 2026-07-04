@@ -15,9 +15,11 @@ export function extractFieldJobs(timeline: TodayWorkTimelineItem[]): TimelineFie
   return timeline.filter((item): item is TimelineFieldJobItem => item.type === 'field_job');
 }
 
-/** 已打外勤上班、尚未完成下班的外勤任务（服务进行中） */
+/** 已打外勤上班、尚未完成下班的外勤任务（服务进行中；请假已通过的不参与 Hero） */
 export function findActiveFieldJob(timeline: TodayWorkTimelineItem[]): TimelineFieldJobItem | undefined {
-  return extractFieldJobs(timeline).find((job) => !!job.fieldClockInAt && !job.fieldClockOutAt);
+  return extractFieldJobs(timeline).find(
+    (job) => !job.leaveApproved && !!job.fieldClockInAt && !job.fieldClockOutAt,
+  );
 }
 
 function jobKey(job: TimelineFieldJobItem): string {

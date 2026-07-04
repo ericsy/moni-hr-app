@@ -4,20 +4,12 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import type { CurrentPunchAction } from '../../types/fieldService';
 import { colors } from '../../theme/colors';
+import { formatWorkPunchHint, formatWorkPunchTitle } from '../../utils/workPunch';
 
 type Props = {
   action: CurrentPunchAction;
   busy?: boolean;
   onPress: () => void | Promise<void>;
-};
-
-const actionLabelKey: Partial<Record<CurrentPunchAction['action'], string>> = {
-  STORE_CLOCK_IN: 'todayActionStoreClockIn',
-  STORE_CLOCK_OUT: 'todayActionStoreClockOut',
-  FIELD_CLOCK_IN: 'todayActionFieldClockIn',
-  FIELD_CLOCK_IN_SYNC_STORE: 'todayActionFieldClockInSyncStore',
-  FIELD_CLOCK_OUT: 'todayActionFieldClockOut',
-  FIELD_CLOCK_OUT_SYNC_STORE: 'todayActionFieldClockOutSyncStore',
 };
 
 function isActionEnabled(action: CurrentPunchAction): boolean {
@@ -28,11 +20,8 @@ function isActionEnabled(action: CurrentPunchAction): boolean {
 export function TodayPunchActionButton({ action, busy = false, onPress }: Props) {
   const { t } = useTranslation();
   const enabled = isActionEnabled(action);
-  const actionTitle =
-    action.buttonLabel ||
-    (actionLabelKey[action.action] ? t(actionLabelKey[action.action]!) : t('todayActionUnknown'));
-  const hint =
-    action.hint || (action.action === 'DONE' ? t('todayActionDone') : action.action === 'WAITING' ? t('todayActionWaiting') : '');
+  const actionTitle = formatWorkPunchTitle(action, t);
+  const hint = formatWorkPunchHint(action, t);
 
   return (
     <View style={styles.card}>

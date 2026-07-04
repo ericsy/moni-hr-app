@@ -24,7 +24,8 @@ import {
   isClockOutWorkAction,
   isFieldWorkPunchAction,
   isWorkPunchActionEnabled,
-  workPunchTitleKey,
+  formatWorkPunchHint,
+  formatWorkPunchTitle,
 } from '../utils/workPunch';
 
 type HeroDisplayMode = 'clock_in' | 'clock_out' | 'clocked_in' | 'completed' | 'idle';
@@ -263,13 +264,13 @@ export function SchedulePunchHeroCard({
 
   // 2. 外勤/店班下班类 work 动作
   if (workReady && workAction && isClockOutWorkAction(workAction.action)) {
-    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
+    const title = formatWorkPunchTitle(workAction, t);
     const isField = isFieldWorkPunchAction(workAction.action);
     const subtitle = isField
       ? t('todayTimelineFieldJob')
       : slot
         ? formatShiftHeroName(slot)
-        : workAction.hint ?? '';
+        : formatWorkPunchHint(workAction, t);
 
     return (
       <View style={styles.card}>
@@ -363,13 +364,13 @@ export function SchedulePunchHeroCard({
 
   // 3. 外勤/店班上班类 work 动作（仅当无下班卡可打时）
   if (workReady && workAction && isClockInWorkAction(workAction.action)) {
-    const title = workAction.buttonLabel || t(workPunchTitleKey(workAction) ?? 'todayActionUnknown');
+    const title = formatWorkPunchTitle(workAction, t);
     const isField = isFieldWorkPunchAction(workAction.action);
     const subtitle = isField
       ? t('todayTimelineFieldJob')
       : slot
         ? formatShiftHeroName(slot)
-        : workAction.hint ?? '';
+        : formatWorkPunchHint(workAction, t);
 
     return (
       <View style={styles.card}>
@@ -404,11 +405,8 @@ export function SchedulePunchHeroCard({
   }
 
   if ((workWaiting || workDone) && workAction) {
-    const title = workDone
-      ? workAction.buttonLabel || t('todayActionDone')
-      : workAction.hint || workAction.buttonLabel || t('todayActionWaiting');
-    const subtitle =
-      workDone || !workAction.hint || workAction.hint === title ? '' : workAction.hint;
+    const title = formatWorkPunchTitle(workAction, t);
+    const subtitle = '';
 
     return (
       <View style={styles.card}>

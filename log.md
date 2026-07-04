@@ -1,5 +1,21 @@
 # moni-hr-app 变更日志
 
+## 2026-07-04
+
+- **外勤改派留底**：请假/日常改派不删分配行，标记 `released_*`；须执行后端迁移 `migrate-merchant_service_job_assignment-release.sql`。
+- **商家端独立外勤请假**：详情不展示「外勤影响与处置」，处置控件放在原因下方。
+- **请假已通过的外勤仍显示在排班**：后端今日工作摘要返回 `leaveApproved`；排班卡片徽章「请假已通过」；当日 Hero 忽略此类外勤。
+- **外勤状态与请假一致**：店班请假含外勤或独立外勤请假时，不再显示「未开始」；待审徽章「请假等审」，已通过「请假已通过」（待审不再在时段下重复提示）。
+- **英文 Hero 误显中文**：打卡标题/提示始终按 `action` 走 i18n，不再使用后端返回的中文 `buttonLabel`/`hint`。
+- **外勤请假已通过 Hero 仍显示到店上班**：`resolveHeroWorkAction` 忽略请假覆盖的外勤/整段请假店班；外勤均已请假且无可打卡店班时 Hero 显示已完成。
+- **商家端申请详情外勤服务类型中文**：`cleaning` 等 code 映射为「保洁」等（`fieldJobs.serviceTypes`）。
+- **商家端误显无重叠外勤**：店班请假未覆盖外勤时段时 App 不展示外勤影响，商家端却展示。商家端与后端改为仅展示/返回与请假时段实际重叠（`full`/`partial`）的外勤。
+- **店班请假已含外勤则不可再申请外勤请假**：
+  - **`fieldLeaveEligibility`**：待审/已通过请假若 `fieldImpacts` 覆盖该外勤，或已有独立外勤假，则隐藏外勤请假入口。
+  - **`mapAttendanceRequestToLeaveRequest`** / **`LeaveRequest`**：列表映射 `fieldImpacts`。
+  - **`request-create`**：提交外勤请假时拦截并提示 `fieldJobLeaveAlreadyCovered`。
+  - 后端 **`assertFieldJobNotCoveredByOpenLeave`** 同步校验。
+
 ## 2026-07-02
 
 - **打卡记录按任务时间排序**：`buildShiftPunchGroups` 在聚合店班与外勤后，按任务计划开始时刻统一排序；**开始时间相同时店班优先于外勤**。

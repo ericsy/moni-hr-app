@@ -318,6 +318,7 @@ export function mapAttendanceRequestToLeaveRequest(
         ? { punchKind, proposedTime }
         : undefined,
     fieldJob,
+    fieldImpacts: type === 'leave' ? row.fieldImpacts : undefined,
   };
 }
 

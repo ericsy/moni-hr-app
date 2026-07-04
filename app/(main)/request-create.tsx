@@ -36,7 +36,7 @@ import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForegr
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
 import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
-import { findOpenFieldLeaveRequest } from '../../src/utils/fieldLeaveEligibility';
+import { findLeaveCoveringFieldJob } from '../../src/utils/fieldLeaveEligibility';
 import { confirmRequiredFieldImpacts, visibleFieldImpacts } from '../../src/utils/leaveFieldImpact';
 import {
   buildLeaveTimesByScheduleKey,
@@ -951,8 +951,8 @@ export default function RequestCreateScreen() {
     if (type === 'leave') {
       if (isFieldLeave) {
         if (!fieldJobFromRoute) return;
-        if (findOpenFieldLeaveRequest(myAttendanceRequests, fieldJobFromRoute.id)) {
-          Alert.alert(t('typeFieldLeave'), t('fieldJobLeaveAlreadyPending'));
+        if (findLeaveCoveringFieldJob(myAttendanceRequests, fieldJobFromRoute.id)) {
+          Alert.alert(t('typeFieldLeave'), t('fieldJobLeaveAlreadyCovered'));
           return;
         }
         setSubmitBusy(true);

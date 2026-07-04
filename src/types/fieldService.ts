@@ -45,6 +45,8 @@ export interface TimelineFieldJobItem {
   linkedStoreShiftId?: string;
   fieldClockInAt?: string | null;
   fieldClockOutAt?: string | null;
+  /** 请假已审批通过（本人因请假离岗，排班仍展示） */
+  leaveApproved?: boolean;
 }
 
 export type TodayWorkTimelineItem = TimelineStoreShiftItem | TimelineFieldJobItem;
