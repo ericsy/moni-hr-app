@@ -14,7 +14,8 @@ import {
   getFieldJobDisplayState,
   type FieldJobDisplayState,
 } from '../utils/fieldMissedPunchEligibility';
-import { openFieldMissedPunchRequest } from '../utils/openFieldRequest';
+import { openFieldLeaveRequest, openFieldMissedPunchRequest } from '../utils/openFieldRequest';
+import { canApplyFieldLeave } from '../utils/fieldLeaveEligibility';
 import { formatFieldServiceType, formatFieldSyncConfig } from '../utils/fieldServiceType';
 import { canOpenMapsNavigation, openMapsNavigation } from '../utils/openMapsNavigation';
 import { canOpenPhoneDial, openPhoneDial } from '../utils/openPhoneDial';
@@ -123,6 +124,7 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
   const canApplyIn = canApplyFieldMissedPunchIn(job, attendanceRequests, now);
   const canApplyOut = canApplyFieldMissedPunchOut(job, attendanceRequests, now);
   const showMissedApply = canApplyIn || canApplyOut;
+  const showLeaveApply = canApplyFieldLeave(job, attendanceRequests);
 
   const onAddressPress = async () => {
     const ok = await openMapsNavigation({
@@ -146,6 +148,10 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
     const punchKind = preferredFieldMissedPunchKind(job, attendanceRequests, now);
     if (!punchKind) return;
     openFieldMissedPunchRequest({ job, punchKind, workDate: workDateIso });
+  };
+
+  const onLeaveApply = () => {
+    openFieldLeaveRequest({ job, workDate: workDateIso });
   };
 
   const syncHint =
@@ -240,6 +246,19 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
           >
             <Ionicons color={colors.fieldInk} name="create-outline" size={16} />
             <Text style={styles.applyBtnText}>{t('fieldJobMissedPunchApply')}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {showLeaveApply ? (
+        <View style={styles.applyBlock}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onLeaveApply}
+            style={({ pressed }) => [styles.applyBtn, pressed && styles.applyBtnPressed]}
+          >
+            <Ionicons color={colors.fieldInk} name="calendar-outline" size={16} />
+            <Text style={styles.applyBtnText}>{t('fieldJobLeaveApply')}</Text>
           </Pressable>
         </View>
       ) : null}

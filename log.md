@@ -541,3 +541,50 @@
 - **外勤联系行去掉标签**：地址/电话行不再显示「服务地址」「客户电话」小字，仅保留图标与内容。
 - **外勤联系行内边距**：地址/电话行补 `paddingLeft`，避免图标与左侧边框重叠。
 - **商家端按日期请假仅显示日期**（`moni-hr-merchant`）：申请管理列表/详情对 `date_range` 请假只展示 `YYYY-MM-DD` 区间，接口日期规范化并与 App 一致推断 `leaveMode`。
+
+## 2026-07-02（P1–P3 外勤联动补全）
+
+- **P1 部分假 + 外勤**：`request-create` 选班/改部分时段时 debounce 预览外勤影响；展示 required/optional；提交仍确认 `acknowledgedFieldJobIds`；后端 `validatePartialLeaveFieldAcknowledgement`。
+- **P2 按日期请假**：`date-leave-create` 提交前预览区间内外勤；后端 `previewDateRangeLeaveImpacts` / `persistDateRangeLeaveSubmission`；`FieldAttendanceLinkageService.listFieldJobsForEmployeeInRange`。
+- **P3 独立外勤请假**：`leaveMode=field_job`；外勤卡片「申请请假」；`request-create` 外勤请假页；后端 `submitFieldJobLeave` + 单工单 impact。
+- **版本 1.2.0**；`supportsLeaveFieldV2()`（P2/P3）；`leaveFieldImpact.ts` / `fieldLeaveEligibility.ts` 共享工具。
+
+## 2026-07-02（班次请假 + 外勤联动 P0）
+
+- **App 版本升至 1.1.0**（`app.json`、`package.json`），新增 **`clientCapability.supportsLeaveFieldV1()`**（阈值 1.1.0，与后端 `AppClientCapability` 一致）。
+- **API 类型与映射**：`types.ts` 增加 `fieldImpacts`、`fieldDispositions`、`acknowledgedFieldJobIds`；`mapAttendanceRequest.ts` 详情映射上述字段；`attendance.ts` 新增 `previewLeaveFieldImpacts`。
+- **请假创建**（`request-create.tsx`）：班次请假提交前调用预览接口；若有 `required` 外勤影响则弹窗确认，提交时携带 `acknowledgedFieldJobIds`。
+- **请假审批**（`request-detail.tsx`）：展示外勤影响；审批通过时对须处置外勤选择「取消 / 改派」及接单人；低版本 App 禁用通过并提示升级；`AuthContext.reviewAttendanceRequest` 支持 `fieldDispositions`。
+- **i18n**：中英文外勤联动相关文案。
+
+- **商家端补齐请假外勤联动（Web）**：
+  - **`moni-hr-merchant/src/lib/merchantApi.ts`**：增加 `fieldImpacts` / `fieldDispositions` 类型与映射；`leaveMode` 兼容 `field_job`；审批接口 `reviewAttendanceRequest` 支持提交 `fieldDispositions`。
+  - **`moni-hr-merchant/src/pages/AttendanceRequests.tsx`**：申请详情展示「外勤影响」；若存在 `required` 外勤影响，审批通过前必须选择每单处置（取消/改派），改派需填写接单人 `merchantAdminId`。
+  - **`moni-hr-merchant/src/i18n/locales.ts`**：补充外勤影响/处置相关中英文案。
+- **商家端外勤请假展示**：
+  - **`attendanceRequestDisplay.ts`**：新增 `isFieldLeaveRequest` 等辅助。
+  - **`AttendanceRequests.tsx`**：列表类型标签/摘要列展示外勤客户、日期、计划时段；详情弹窗展示外勤工单信息；外勤请假审批须选取消/改派（下拉选人）。
+  - **`locales.ts`**：`fieldLeave` / `fieldLeaveDetail` / `fieldLeaveDispositionHint` 等文案。
+- **外勤请假审批处置（App + 后端）**：
+  - **`LeaveFieldLinkageService`**：外勤请假提交落库 required impact；审批强制 `fieldDispositions`。
+  - **`request-detail.tsx`**：外勤请假审批展示「外勤处置」并支持取消/改派选人。
+- **商家端申请详情门店名称**：`moni-hr-merchant/AttendanceRequests.tsx` 详情门店优先显示名称，从 `storeNameById` 解析，不再显示 `storeId`。
+- **店长/副店长审批权限**：本店店长/副店长可审批本店他人全部待审申请（不限指定审批人）；后端 `review`、App `canReviewAttendanceRequest` 已对齐；不能审批自己的申请。
+- **申请列表**：移除卡片上的通过/驳回按钮，审批操作仅在详情页进行。
+- **申请列表外勤信息**：外勤卡片标签列宽 64px，内容对齐且四字标签不换行。
+- **申请详情撤回按钮误显**：`request-detail.tsx` 撤回仅对**申请人**展示。
+
+## 2026-07-03
+
+- **店铺排班展示外勤任务**：
+  - 后端新增 **`GET /api/v1/app/schedule/store-field-jobs`**（店长/副店长，按周查询本店外勤工单及接单人）。
+  - App **`schedule-week.tsx`** 店铺排班按**开始时间**混排店班与外勤；外勤起止时刻落在店班时段内则**嵌套**在对应班次卡片下（优先 `linkedStoreShiftId`），否则独立展示。
+  - 新增 **`storeRosterTimeline.ts`**、**`mapStoreFieldJobs.ts`**、**`StoreFieldJobCard.tsx`**、**`fetchStorePublishedFieldJobs`**；**`mapStorePublishedSchedule`** 班次保留 **`cellIds`** 供外勤关联。
+- **外勤请假撤回后按钮不恢复**：排班页返回时未刷新申请列表，且周排班未向 **`FieldJobRow`** 传入 **`myAttendanceRequests`**，导致仍按「有待审批假」隐藏按钮。已在 **`schedule.tsx`** / **`schedule-week.tsx`** 增加 **`useFocusEffect`** 刷新申请；**`fieldLeaveEligibility.ts`** 明确仅 **`pending`/`approved`** 占用、**`cancelled`** 可再次申请。
+- **外勤请假支持过去日期**：**`canApplyFieldLeave`** 移除「外勤日期须 ≥ 今天」限制，已过去的外勤也可申请请假（仍受待审/已通过占用、后端工单状态约束）。
+- **店班请假外勤影响展示优化**：新增 **`formatFieldImpact.ts`**、**`FieldImpactPreviewList`**；**`request-create`** 外勤影响改为卡片展示（服务日期、时段、重叠说明、须处置标签）；ISO 时间格式化为本地可读；**`full`/`partial`** 改为中文文案；申请详情 **`request-detail`** 同步优化。
+- **部分请假外勤重叠误判**：店班 13:50–15:50、不在岗 13:50–14:00 却提示「外勤全程在请假时段内」。根因：后端 **`LeaveFieldLinkageService`** 按 `early_out` 把缺席算成 14:00–班次结束，与 App「不在岗时段」语义相反。已改为部分请假直接用 **`partialStartTime`–`partialEndTime`** 计算重叠。
+- **外勤重叠文案**：`leaveFieldOverlapFull/Partial` 改为「外勤时间都在本次请假内」「外勤与本次请假时间部分重叠」，去掉「落在不在岗时段」等难懂表述。
+- **外勤预览误按整段请假计算**：界面在不可整段请假时默认展示「部分时段」，但预览 API 仍可能按 `leaveScope=full` 发送，导致外勤 `14:05–15:05` 在请假 `13:50–14:00` 时被误判为完全重叠。新增 **`leaveScopeResolve.ts`** 统一有效请假范围；预览/提交共用 **`buildLeaveTimesByScheduleKey`**；无重叠外勤不再展示（**`visibleFieldImpacts`**）；后端预览过滤 `overlapType=none`。
+- **修复 `isFullLeaveBlocked` 未定义**：`useCallback` 定义晚于 `useMemo`/`useEffect` 引用，运行时报 `is not a function`；已上移至 `focusedSlots` 之后。
+- **外勤影响英文徽章换行**：`leaveFieldImpactRequired` 改为 `Requires approval`；徽章去掉 `maxWidth: 46%` 并设 `flexShrink: 0`，避免在 “at” 处断行。

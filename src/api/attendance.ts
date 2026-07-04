@@ -1,9 +1,11 @@
 import { apiRequest } from './client';
 import type {
+  AppAttendanceFieldImpact,
   AppAttendanceRequest,
   AppAttendanceRequestCreate,
   AppAttendanceRequestList,
   AppAttendanceRequestReview,
+  AppAttendanceLeaveItemRequest,
   MerchantAttendanceRequest,
 } from './types';
 
@@ -49,6 +51,26 @@ export function fetchAttendanceRequestDetail(storeId: string | number, requestId
   return apiRequest<MerchantAttendanceRequest>(`/api/v1/app/attendance/requests/${requestId}`, {
     storeId,
   });
+}
+
+/** POST /api/v1/app/attendance/requests/preview-leave-field-impacts — 提交前预览外勤影响 */
+export type LeaveFieldImpactPreviewBody =
+  | { leaveItems: AppAttendanceLeaveItemRequest[] }
+  | { leaveDateFrom: string; leaveDateTo: string }
+  | { fieldJobId: number };
+
+export function previewLeaveFieldImpacts(
+  storeId: string | number,
+  body: LeaveFieldImpactPreviewBody,
+) {
+  return apiRequest<{ fieldImpacts?: AppAttendanceFieldImpact[] }>(
+    '/api/v1/app/attendance/requests/preview-leave-field-impacts',
+    {
+      method: 'POST',
+      storeId,
+      body,
+    },
+  );
 }
 
 /** POST /api/v1/app/attendance/requests */

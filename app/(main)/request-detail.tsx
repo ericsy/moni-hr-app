@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -24,12 +24,20 @@ import {
   mapAttendanceRequestDetail,
   type AttendanceRequestDetail,
 } from '../../src/api/mapAttendanceRequest';
-import type { AppAttendanceLeaveItem, LeaveSubstitutionReviewItem } from '../../src/api/types';
+import type {
+  AppAttendanceFieldImpact,
+  AppAttendanceLeaveItem,
+  FieldLeaveDispositionRequest,
+  LeaveSubstitutionReviewItem,
+} from '../../src/api/types';
 import { AttendanceReviewPrompt } from '../../src/components/AttendanceReviewPrompt';
 import { useAuth } from '../../src/context/AuthContext';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
+import { canReviewAttendanceRequest, isRequestApplicant } from '../../src/utils/requestApproval';
 import { colors } from '../../src/theme/colors';
 import { formatPunchHeaderDate, formatRequestDateTime } from '../../src/utils/formatPunchTime';
+import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import { buildFieldImpactDisplay, parseFieldImpactScheduleWindow } from '../../src/utils/formatFieldImpact';
 import { formatShiftBindingLine } from '../../src/utils/requestShiftBinding';
 
 function scheduleDateKey(value?: string | null): string {
@@ -68,6 +76,33 @@ function formatShiftRangeFromItem(item: AppAttendanceLeaveItem): string {
   return s || e || '—';
 }
 
+function resolveEffectiveRequiredFieldImpacts(
+  detail: AttendanceRequestDetail | null,
+): AppAttendanceFieldImpact[] {
+  if (!detail) return [];
+  const required = (detail.fieldImpacts ?? []).filter((row) => row.requiredAction === 'required');
+  if (required.length > 0) return required;
+  if (detail.type !== 'leave' || detail.leaveMode !== 'field_job' || !detail.fieldJob?.id) return [];
+  const jobId = Number(detail.fieldJob.id);
+  if (!Number.isFinite(jobId) || jobId <= 0) return [];
+  const range = (detail.fieldJob.scheduledRange ?? '').trim();
+  const parts = range.split(/[–-]/).map((part) => part.trim()).filter(Boolean);
+  const workDate = detail.start;
+  const scheduledStart =
+    workDate && parts[0] ? `${workDate}T${parts[0]}` : parts[0] || undefined;
+  const scheduledEnd =
+    workDate && parts[1] ? `${workDate}T${parts[1]}` : parts[1] || undefined;
+  return [
+    {
+      fieldJobId: jobId,
+      customerName: detail.fieldJob.customerName,
+      scheduledStart,
+      scheduledEnd,
+      requiredAction: 'required',
+    },
+  ];
+}
+
 export default function RequestDetailScreen() {
   const { t, i18n } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -89,10 +124,42 @@ export default function RequestDetailScreen() {
     Record<string, boolean>
   >({});
   const [substitutePickerOpenFor, setSubstitutePickerOpenFor] = useState<string | null>(null);
+  const [fieldActionByJobId, setFieldActionByJobId] = useState<
+    Record<string, 'cancel' | 'reassign' | ''>
+  >({});
+  const [fieldAssigneeByJobId, setFieldAssigneeByJobId] = useState<Record<string, string>>({});
+  const [fieldCandidatesByJobId, setFieldCandidatesByJobId] = useState<
+    Record<string, SubstituteCandidate[]>
+  >({});
+  const [fieldCandidatesLoading, setFieldCandidatesLoading] = useState<Record<string, boolean>>({});
+  const [fieldAssigneePickerOpenFor, setFieldAssigneePickerOpenFor] = useState<string | null>(
+    null,
+  );
 
-  const showApprovalActions = params.approval === '1';
   const requestId = params.id ?? '';
   const storeId = session?.user?.selectedStoreId ?? '';
+
+  const showApprovalActions =
+    detail != null &&
+    canReviewAttendanceRequest(session?.user, storeId, detail, detail.applicant?.merchantAdminId);
+
+  const effectiveRequiredFieldImpacts = useMemo(
+    () => resolveEffectiveRequiredFieldImpacts(detail),
+    [detail],
+  );
+  const showFieldDispositionEditor =
+    showApprovalActions &&
+    detail?.status === 'pending' &&
+    detail?.type === 'leave' &&
+    effectiveRequiredFieldImpacts.length > 0;
+  const fieldLinkageSupported = useMemo(() => {
+    if (detail?.leaveMode === 'field_job' || detail?.leaveMode === 'date_range') {
+      return supportsLeaveFieldV2();
+    }
+    return supportsLeaveFieldV1();
+  }, [detail?.leaveMode]);
+  const approveBlockedByFieldLinkage =
+    showFieldDispositionEditor && !fieldLinkageSupported;
 
   const loadDetail = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -121,6 +188,21 @@ export default function RequestDetailScreen() {
           setSubstituteIdByLeaveItem(next);
         } else {
           setSubstituteIdByLeaveItem({});
+        }
+        const requiredJobs = resolveEffectiveRequiredFieldImpacts(mapped);
+        if (requiredJobs.length > 0) {
+          const actions: Record<string, 'cancel' | 'reassign' | ''> = {};
+          const assignees: Record<string, string> = {};
+          for (const row of requiredJobs) {
+            const key = String(row.fieldJobId);
+            actions[key] = '';
+            assignees[key] = '';
+          }
+          setFieldActionByJobId(actions);
+          setFieldAssigneeByJobId(assignees);
+        } else {
+          setFieldActionByJobId({});
+          setFieldAssigneeByJobId({});
         }
       } catch (e) {
         const message = e instanceof ApiError ? e.message : t('requestDetailLoadFailed');
@@ -157,6 +239,67 @@ export default function RequestDetailScreen() {
     [storeId],
   );
 
+  const loadFieldAssigneeCandidates = useCallback(
+    async (fieldJobId: string, impact: AppAttendanceFieldImpact) => {
+      if (!storeId || !fieldJobId) return;
+      setFieldCandidatesLoading((prev) => ({ ...prev, [fieldJobId]: true }));
+      try {
+        const window = parseFieldImpactScheduleWindow(impact, i18n.language);
+        const items = await fetchSubstituteCandidates(storeId, {
+          scheduleDate: window.scheduleDate,
+          startTime: window.startTime,
+          endTime: window.endTime,
+          excludeMerchantAdminId: detail?.applicantId,
+        });
+        setFieldCandidatesByJobId((prev) => ({ ...prev, [fieldJobId]: items }));
+      } catch {
+        setFieldCandidatesByJobId((prev) => ({ ...prev, [fieldJobId]: [] }));
+      } finally {
+        setFieldCandidatesLoading((prev) => ({ ...prev, [fieldJobId]: false }));
+      }
+    },
+    [storeId, detail?.applicantId, i18n.language],
+  );
+
+  const buildFieldDispositions = (): FieldLeaveDispositionRequest[] | undefined => {
+    if (!showFieldDispositionEditor) return undefined;
+    const rows: FieldLeaveDispositionRequest[] = [];
+    for (const impact of effectiveRequiredFieldImpacts) {
+      const key = String(impact.fieldJobId);
+      const action = fieldActionByJobId[key];
+      if (action !== 'cancel' && action !== 'reassign') continue;
+      const row: FieldLeaveDispositionRequest = {
+        fieldJobId: impact.fieldJobId,
+        action,
+      };
+      if (action === 'reassign') {
+        const assignee = Number(fieldAssigneeByJobId[key]);
+        if (!Number.isFinite(assignee) || assignee <= 0) continue;
+        row.assigneeMerchantAdminId = assignee;
+      }
+      rows.push(row);
+    }
+    return rows.length > 0 ? rows : undefined;
+  };
+
+  const validateFieldDispositionsForApprove = (): string | null => {
+    if (!showFieldDispositionEditor || !fieldLinkageSupported) return null;
+    for (const impact of effectiveRequiredFieldImpacts) {
+      const key = String(impact.fieldJobId);
+      const action = fieldActionByJobId[key];
+      if (action !== 'cancel' && action !== 'reassign') {
+        return t('leaveFieldReviewIncomplete');
+      }
+      if (action === 'reassign') {
+        const assignee = Number(fieldAssigneeByJobId[key]);
+        if (!Number.isFinite(assignee) || assignee <= 0) {
+          return t('leaveFieldReviewReassignRequired');
+        }
+      }
+    }
+    return null;
+  };
+
   const buildSubstitutions = (): LeaveSubstitutionReviewItem[] | undefined => {
     if (!detail?.leaveItemsDetail?.length) return undefined;
     const items: LeaveSubstitutionReviewItem[] = [];
@@ -178,16 +321,33 @@ export default function RequestDetailScreen() {
 
   const submitReview = async (reviewComment: string) => {
     if (!detail || !reviewTarget) return;
+    if (reviewTarget.approved) {
+      if (approveBlockedByFieldLinkage) {
+        Alert.alert(t('requestDetailTitle'), t('leaveFieldReviewUpgrade'));
+        return;
+      }
+      const fieldError = validateFieldDispositionsForApprove();
+      if (fieldError) {
+        Alert.alert(t('requestDetailTitle'), fieldError);
+        return;
+      }
+    }
     setReviewBusy(true);
     const substitutions =
-      reviewTarget.approved && detail.type === 'leave' && detail.leaveMode !== 'date_range'
+      reviewTarget.approved &&
+      detail.type === 'leave' &&
+      detail.leaveMode !== 'date_range' &&
+      detail.leaveMode !== 'field_job'
         ? buildSubstitutions()
         : undefined;
+    const fieldDispositions =
+      reviewTarget.approved && showFieldDispositionEditor ? buildFieldDispositions() : undefined;
     const res = await reviewAttendanceRequest(
       detail.id,
       reviewTarget.approved,
       reviewComment,
       substitutions,
+      fieldDispositions,
     );
     setReviewBusy(false);
     if (!res.ok) {
@@ -224,12 +384,18 @@ export default function RequestDetailScreen() {
   };
 
   const showCancelAction =
-    !showApprovalActions && detail?.status === 'pending';
+    detail != null &&
+    detail.status === 'pending' &&
+    isRequestApplicant(session?.user?.id, detail, detail.applicant?.merchantAdminId);
 
   const statusLabel = detail ? statusLabelFor(detail.status, t) : '';
 
   const typeLabel =
-    detail?.type === 'leave' ? t('typeLeave') : t('typeMissedPunch');
+    detail?.type === 'leave'
+      ? detail.leaveMode === 'field_job'
+        ? t('typeFieldLeave')
+        : t('typeLeave')
+      : t('typeMissedPunch');
 
   const renderPersonRow = (label: string, person?: { displayName?: string } | null) => {
     const name = formatEmployeeBrief(person ?? undefined);
@@ -314,8 +480,16 @@ export default function RequestDetailScreen() {
                   </View>
                   {detail.leaveMode === 'date_range' ? (
                     <Text style={styles.itemMeta}>{t('dateLeaveNoShiftHint')}</Text>
+                  ) : detail.leaveMode === 'field_job' && detail.fieldJob ? (
+                    <View style={styles.itemCard}>
+                      <Text style={styles.itemTitle}>{detail.fieldJob.customerName}</Text>
+                      <Text style={styles.itemMeta}>{detail.fieldJob.scheduledRange}</Text>
+                      {detail.fieldJob.serviceAddress ? (
+                        <Text style={styles.itemMeta}>{detail.fieldJob.serviceAddress}</Text>
+                      ) : null}
+                    </View>
                   ) : null}
-                  {detail.leaveMode === 'date_range'
+                  {detail.leaveMode === 'date_range' || detail.leaveMode === 'field_job'
                     ? null
                     : (detail.leaveItemsDetail ?? []).map((item, idx) => {
                     const workDate = scheduleDateKey(item.scheduleDate) || detail.start;
@@ -507,6 +681,189 @@ export default function RequestDetailScreen() {
                 </View>
               )}
 
+              {((detail.fieldImpacts?.length ?? 0) > 0 ||
+                (detail.leaveMode === 'field_job' && effectiveRequiredFieldImpacts.length > 0)) ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {detail.leaveMode === 'field_job'
+                      ? t('leaveFieldDispositionSection')
+                      : t('leaveFieldImpactSection')}
+                  </Text>
+                  {(detail.leaveMode === 'field_job'
+                    ? effectiveRequiredFieldImpacts
+                    : detail.fieldImpacts ?? []
+                  ).map((impact) => {
+                    const key = String(impact.fieldJobId);
+                    const row = buildFieldImpactDisplay(impact, t, i18n.language);
+                    const saved = (detail.fieldDispositions ?? []).find(
+                      (item) => item.fieldJobId === impact.fieldJobId,
+                    );
+                    return (
+                      <View key={key} style={styles.itemCard}>
+                        <Text style={styles.itemTitle}>{row.title}</Text>
+                        <Text style={styles.itemMeta}>
+                          {t('leaveFieldImpactDate')}: {row.dateLabel}
+                        </Text>
+                        <Text style={styles.itemMeta}>
+                          {t('leaveFieldImpactTime')}: {row.rangeLabel}
+                        </Text>
+                        {row.serviceTypeLabel ? (
+                          <Text style={styles.itemMeta}>
+                            {t('fieldJobServiceType')}: {row.serviceTypeLabel}
+                          </Text>
+                        ) : null}
+                        {row.overlapLabel ? (
+                          <Text style={styles.itemMeta}>
+                            {t('leaveFieldImpactOverlap')}: {row.overlapLabel}
+                          </Text>
+                        ) : null}
+                        {row.syncLabel ? (
+                          <Text style={styles.itemMeta}>{row.syncLabel}</Text>
+                        ) : null}
+                        <Text style={styles.itemMeta}>
+                          {row.required
+                            ? t('leaveFieldImpactRequired')
+                            : t('leaveFieldImpactOptional')}
+                        </Text>
+                        {saved?.action ? (
+                          <Text style={styles.itemMeta}>
+                            {saved.action === 'reassign'
+                              ? t('leaveFieldDispositionReassign')
+                              : t('leaveFieldDispositionCancel')}
+                            {saved.assigneeMerchantAdminId
+                              ? ` (#${saved.assigneeMerchantAdminId})`
+                              : ''}
+                          </Text>
+                        ) : null}
+                        {showFieldDispositionEditor && row.required ? (
+                          <View style={styles.fieldActionRow}>
+                            <Pressable
+                              style={[
+                                styles.fieldActionBtn,
+                                fieldActionByJobId[key] === 'cancel' && styles.fieldActionBtnActive,
+                              ]}
+                              onPress={() => {
+                                setFieldActionByJobId((prev) => ({ ...prev, [key]: 'cancel' }));
+                                setFieldAssigneeByJobId((prev) => ({ ...prev, [key]: '' }));
+                                setFieldAssigneePickerOpenFor(null);
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.fieldActionBtnText,
+                                  fieldActionByJobId[key] === 'cancel' &&
+                                    styles.fieldActionBtnTextActive,
+                                ]}
+                              >
+                                {t('leaveFieldDispositionCancel')}
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              style={[
+                                styles.fieldActionBtn,
+                                fieldActionByJobId[key] === 'reassign' && styles.fieldActionBtnActive,
+                              ]}
+                              onPress={() => {
+                                setFieldActionByJobId((prev) => ({ ...prev, [key]: 'reassign' }));
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.fieldActionBtnText,
+                                  fieldActionByJobId[key] === 'reassign' &&
+                                    styles.fieldActionBtnTextActive,
+                                ]}
+                              >
+                                {t('leaveFieldDispositionReassign')}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        ) : null}
+                        {showFieldDispositionEditor &&
+                        row.required &&
+                        fieldActionByJobId[key] === 'reassign' ? (
+                          <View style={styles.subPickerWrap}>
+                            <Pressable
+                              style={styles.subPickerTrigger}
+                              onPress={() => {
+                                const nextOpen = fieldAssigneePickerOpenFor === key ? null : key;
+                                setFieldAssigneePickerOpenFor(nextOpen);
+                                if (nextOpen) {
+                                  void loadFieldAssigneeCandidates(key, impact);
+                                }
+                              }}
+                            >
+                              <Text style={styles.subPickerTriggerText}>
+                                {(() => {
+                                  const selectedId = fieldAssigneeByJobId[key];
+                                  if (!selectedId) return t('leaveFieldSelectAssignee');
+                                  const found = fieldCandidatesByJobId[key]?.find(
+                                    (c) => String(c.id) === selectedId,
+                                  );
+                                  return found?.name || selectedId;
+                                })()}
+                              </Text>
+                              <Ionicons
+                                name={
+                                  fieldAssigneePickerOpenFor === key ? 'chevron-up' : 'chevron-down'
+                                }
+                                size={18}
+                                color={colors.textMuted}
+                              />
+                            </Pressable>
+                            {fieldAssigneePickerOpenFor === key ? (
+                              <View style={styles.subPickerList}>
+                                {fieldCandidatesLoading[key] ? (
+                                  <View style={styles.subPickerLoading}>
+                                    <ActivityIndicator color={colors.primary} />
+                                  </View>
+                                ) : (fieldCandidatesByJobId[key] ?? []).length === 0 ? (
+                                  <Text style={styles.subPickerEmpty}>
+                                    {t('leaveFieldNoAssignees')}
+                                  </Text>
+                                ) : (
+                                  (fieldCandidatesByJobId[key] ?? []).map((candidate) => {
+                                    const selected = fieldAssigneeByJobId[key] === String(candidate.id);
+                                    return (
+                                      <Pressable
+                                        key={String(candidate.id)}
+                                        style={[
+                                          styles.subPickerOption,
+                                          selected && styles.subPickerOptionSelected,
+                                        ]}
+                                        onPress={() => {
+                                          setFieldAssigneeByJobId((prev) => ({
+                                            ...prev,
+                                            [key]: String(candidate.id),
+                                          }));
+                                          setFieldAssigneePickerOpenFor(null);
+                                        }}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.subPickerOptionText,
+                                            selected && styles.subPickerOptionTextSelected,
+                                          ]}
+                                        >
+                                          {candidate.name}
+                                        </Text>
+                                      </Pressable>
+                                    );
+                                  })
+                                )}
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                  {approveBlockedByFieldLinkage ? (
+                    <Text style={styles.upgradeHint}>{t('leaveFieldReviewUpgrade')}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>{t('reason')}</Text>
                 <Text style={styles.reasonBody}>{detail.reason}</Text>
@@ -559,9 +916,23 @@ export default function RequestDetailScreen() {
                   <Text style={styles.rejectBtnText}>{t('requestReject')}</Text>
                 </Pressable>
                 <Pressable
-                  disabled={reviewBusy}
-                  onPress={() => setReviewTarget({ approved: true })}
-                  style={[styles.approveBtn, reviewBusy && styles.btnDisabled]}
+                  disabled={reviewBusy || approveBlockedByFieldLinkage}
+                  onPress={() => {
+                    if (approveBlockedByFieldLinkage) {
+                      Alert.alert(t('requestDetailTitle'), t('leaveFieldReviewUpgrade'));
+                      return;
+                    }
+                    const fieldError = validateFieldDispositionsForApprove();
+                    if (fieldError) {
+                      Alert.alert(t('requestDetailTitle'), fieldError);
+                      return;
+                    }
+                    setReviewTarget({ approved: true });
+                  }}
+                  style={[
+                    styles.approveBtn,
+                    (reviewBusy || approveBlockedByFieldLinkage) && styles.btnDisabled,
+                  ]}
                 >
                   <Text style={styles.approveBtnText}>{t('requestApprove')}</Text>
                 </Pressable>
@@ -675,6 +1046,29 @@ const styles = StyleSheet.create({
   },
   itemTitle: { fontSize: 15, fontWeight: '800', color: colors.primaryDark },
   itemMeta: { marginTop: 4, fontSize: 13, color: colors.textMuted, lineHeight: 18 },
+  fieldActionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  fieldActionBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  fieldActionBtnActive: {
+    borderColor: colors.primary,
+    backgroundColor: '#EEF4FF',
+  },
+  fieldActionBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  fieldActionBtnTextActive: { color: colors.primary, fontWeight: '800' },
+  upgradeHint: {
+    marginTop: 10,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.warning,
+    fontWeight: '600',
+  },
   reasonBody: { fontSize: 15, color: colors.text, lineHeight: 22 },
   footer: {
     flexDirection: 'row',

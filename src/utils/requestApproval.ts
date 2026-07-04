@@ -40,30 +40,63 @@ export function countPendingApprovals(approvalRequests: LeaveRequest[]): number 
   return approvalRequests.filter((r) => r.status === 'pending').length;
 }
 
-/** 副店长作为审批人是否有待审批或已处理记录 */
-export function hasDeputyApprovalRecords(approvalRequests: LeaveRequest[]): boolean {
-  return approvalRequests.some(
-    (r) => r.status === 'pending' || r.status === 'approved' || r.status === 'rejected',
-  );
+/** 店长/副店长是否可审批该申请（本店、待审、非本人提交） */
+export function canReviewAttendanceRequest(
+  user: User | undefined,
+  storeId: string | undefined,
+  request: Pick<LeaveRequest, 'applicantId' | 'status' | 'storeId'>,
+  applicantMerchantAdminId?: number | null,
+): boolean {
+  if (!user || !storeId || request.status !== 'pending') return false;
+  const requestStoreId = request.storeId ?? storeId;
+  if (requestStoreId !== storeId) return false;
+  if (isRequestApplicant(user.id, request, applicantMerchantAdminId)) return false;
+  return isManagerRoleAtStore(user, storeId);
+}
+
+/** 待审批数量（店长/副店长视角：本店他人 pending） */
+export function countPendingApprovalsForManager(
+  approvalRequests: LeaveRequest[],
+  userId: string | undefined,
+): number {
+  if (!userId) return 0;
+  return approvalRequests.filter(
+    (r) => r.status === 'pending' && r.applicantId !== userId,
+  ).length;
+}
+
+/** @deprecated 使用 canReviewAttendanceRequest */
+export function isAssignedApprover(
+  userId: string | undefined,
+  request: Pick<LeaveRequest, 'approverId' | 'status'>,
+): boolean {
+  if (!userId || !request.approverId || request.status !== 'pending') return false;
+  return request.approverId === userId;
+}
+
+/** 当前用户是否为该申请的提交人 */
+export function isRequestApplicant(
+  userId: string | undefined,
+  request: Pick<LeaveRequest, 'applicantId'>,
+  applicantMerchantAdminId?: number | null,
+): boolean {
+  if (!userId) return false;
+  const applicantId =
+    applicantMerchantAdminId != null
+      ? String(applicantMerchantAdminId)
+      : request.applicantId;
+  return applicantId != null && applicantId === userId;
 }
 
 /**
- * 是否展示「审批记录 / 申请记录」分栏：
- * - 店长：始终分栏
- * - 副店长：本店无店长 → 始终分栏；本店有店长 → 仅当存在待审批或已审批记录时分栏
+ * 是否展示「审批记录 / 申请记录」分栏：店长或副店长始终分栏。
  */
 export function shouldSplitRequestViews(
   user: User | undefined,
   storeId: string | undefined,
-  approvalRequests: LeaveRequest[],
-  hint?: StoreManagerHint,
+  _approvalRequests: LeaveRequest[],
+  _hint?: StoreManagerHint,
 ): boolean {
   if (!user || !storeId) return false;
-  if (isStoreManagerAt(user, storeId)) return true;
-  if (!isDeputyManagerAt(user, storeId)) return false;
-
-  const storeHasManager = doesStoreHaveStoreManager(user, storeId, hint);
-  if (!storeHasManager) return true;
-
-  return hasDeputyApprovalRecords(approvalRequests);
+  return isManagerRoleAtStore(user, storeId);
 }

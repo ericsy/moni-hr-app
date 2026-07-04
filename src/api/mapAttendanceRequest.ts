@@ -1,5 +1,7 @@
 import type { LeaveRequest, LeaveTimeSpan, RequestShiftBinding } from '../context/AuthContext';
 import type {
+  AppAttendanceFieldDisposition,
+  AppAttendanceFieldImpact,
   AppAttendanceLeaveItem,
   AppAttendanceLeaveItemRequest,
   AppAttendanceRequest,
@@ -116,7 +118,7 @@ function mapMissedPunchBinding(row: AppAttendanceRequest): RequestShiftBinding |
   };
 }
 
-function mapFieldMissedPunchMeta(row: AppAttendanceRequest): LeaveRequest['fieldJob'] | undefined {
+function mapFieldJobMetaFromRequest(row: AppAttendanceRequest): LeaveRequest['fieldJob'] | undefined {
   if (row.fieldJobId == null) return undefined;
   const scheduledRange = formatShiftRangeTimes(row.shiftStartTime, row.shiftEndTime);
   return {
@@ -127,6 +129,12 @@ function mapFieldMissedPunchMeta(row: AppAttendanceRequest): LeaveRequest['field
     syncStoreClockIn: row.syncStoreClockIn === true,
     syncStoreClockOut: row.syncStoreClockOut === true,
   };
+}
+
+function mapFieldMissedPunchMeta(row: AppAttendanceRequest): LeaveRequest['fieldJob'] | undefined {
+  if (row.fieldJobId == null) return undefined;
+  if (normalizeRequestType(row.requestType) !== 'missed_punch') return undefined;
+  return mapFieldJobMetaFromRequest(row);
 }
 
 function hmFromIsoOrTime(value?: string | null): string | undefined {
@@ -154,14 +162,16 @@ function leaveDateSpan(shifts: RequestShiftBinding[]): { start: string; end: str
 function resolveLeaveModeForRow(
   row: AppAttendanceRequest,
   type: ReturnType<typeof normalizeRequestType>,
-): 'shift' | 'date_range' {
+): 'shift' | 'date_range' | 'field_job' {
   if (type !== 'leave') return 'shift';
   const raw = String(row.leaveMode ?? '')
     .trim()
     .toLowerCase()
     .replace(/-/g, '_');
+  if (raw === 'field_job' || raw === 'fieldjob') return 'field_job';
   if (raw === 'date_range' || raw === 'daterange') return 'date_range';
   if (raw === 'shift') return 'shift';
+  if (row.fieldJobId != null && row.requestType === 'leave') return 'field_job';
   const from = row.leaveDateFrom?.trim();
   const to = row.leaveDateTo?.trim();
   if (from && to) return 'date_range';
@@ -209,6 +219,8 @@ export type AttendanceRequestDetail = LeaveRequest & {
   proxyReviewer?: MerchantEmployeeBrief | null;
   proxyReview?: boolean;
   leaveItemsDetail?: AppAttendanceLeaveItem[];
+  fieldImpacts?: AppAttendanceFieldImpact[];
+  fieldDispositions?: AppAttendanceFieldDisposition[];
 };
 
 /** API → 详情展示模型 */
@@ -235,6 +247,8 @@ export function mapAttendanceRequestDetail(row: MerchantAttendanceRequest): Atte
     proxyReviewer: row.proxyReviewer,
     proxyReview: row.proxyReview ?? undefined,
     leaveItemsDetail: row.leaveItems,
+    fieldImpacts: row.fieldImpacts,
+    fieldDispositions: row.fieldDispositions,
   };
 }
 
@@ -257,11 +271,23 @@ export function mapAttendanceRequestToLeaveRequest(
           return binding ? [binding] : [];
         })();
 
-  const fieldJob = type === 'missed_punch' ? mapFieldMissedPunchMeta(row) : undefined;
+  const fieldJob =
+    type === 'missed_punch'
+      ? mapFieldMissedPunchMeta(row)
+      : type === 'leave' && leaveMode === 'field_job'
+        ? mapFieldJobMetaFromRequest(row)
+        : undefined;
   const missedWorkDate =
-    shifts[0]?.workDate || scheduleDateKeyFrom(row.scheduleDate) || '';
+    fieldJob && leaveMode === 'field_job'
+      ? scheduleDateKeyFrom(row.scheduleDate) || span.start
+      : shifts[0]?.workDate || scheduleDateKeyFrom(row.scheduleDate) || '';
   const span =
-    type === 'leave' && leaveMode === 'date_range' && row.leaveDateFrom && row.leaveDateTo
+    type === 'leave' && leaveMode === 'field_job'
+      ? {
+          start: scheduleDateKeyFrom(row.scheduleDate) || calendarDateKey(new Date()),
+          end: scheduleDateKeyFrom(row.scheduleDate) || calendarDateKey(new Date()),
+        }
+      : type === 'leave' && leaveMode === 'date_range' && row.leaveDateFrom && row.leaveDateTo
       ? { start: String(row.leaveDateFrom).slice(0, 10), end: String(row.leaveDateTo).slice(0, 10) }
       : type === 'missed_punch' && missedWorkDate
       ? { start: missedWorkDate, end: missedWorkDate }
@@ -278,6 +304,8 @@ export function mapAttendanceRequestToLeaveRequest(
       options?.applicantId ??
       (row.applicantMerchantAdminId != null ? String(row.applicantMerchantAdminId) : undefined),
     applicantName: options?.applicantName ?? row.applicantName,
+    approverId:
+      row.approverMerchantAdminId != null ? String(row.approverMerchantAdminId) : undefined,
     storeId: String(row.storeId),
     start: span.start,
     end: span.end,
@@ -337,6 +365,15 @@ export type SubmitAttendanceInput =
       reason: string;
       leaveDateFrom: string;
       leaveDateTo: string;
+      acknowledgedFieldJobIds?: number[];
+    }
+  | {
+      type: 'leave';
+      source: 'field';
+      reason: string;
+      fieldJobId: string;
+      workDate: string;
+      acknowledgedFieldJobIds?: number[];
     }
   | {
       type: 'leave';
@@ -347,6 +384,7 @@ export type SubmitAttendanceInput =
       leaveTime?: LeaveTimeSpan;
       /** 多段/同日多班：key 为 `workDate|scheduleId` */
       leaveTimesByScheduleKey?: Record<string, LeaveTimeSpan>;
+      acknowledgedFieldJobIds?: number[];
     }
   | {
       type: 'missed_punch';
@@ -374,6 +412,20 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
       leaveDateFrom: input.leaveDateFrom,
       leaveDateTo: input.leaveDateTo,
       reason: normalizeSubmitReason(input.reason),
+      ...(input.acknowledgedFieldJobIds?.length
+        ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
+        : {}),
+    };
+  }
+  if (input.type === 'leave' && 'source' in input && input.source === 'field') {
+    return {
+      requestType: 'leave',
+      leaveMode: 'field_job',
+      fieldJobId: Number(input.fieldJobId),
+      reason: normalizeSubmitReason(input.reason),
+      ...(input.acknowledgedFieldJobIds?.length
+        ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
+        : {}),
     };
   }
   if (input.type === 'leave') {
@@ -385,6 +437,9 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
         leaveTime: input.leaveTime,
         leaveTimesByScheduleKey: input.leaveTimesByScheduleKey,
       }),
+      ...(input.acknowledgedFieldJobIds?.length
+        ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
+        : {}),
     };
   }
   if (input.type === 'missed_punch' && 'source' in input && input.source === 'field') {

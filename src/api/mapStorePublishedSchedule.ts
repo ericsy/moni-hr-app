@@ -15,6 +15,8 @@ export type StoreDayShiftGroup = {
   isSubstitution: boolean;
   originalDisplayName?: string;
   staff: StoreRosterStaffEntry[];
+  /** 聚合后的已发布排班格 id（用于外勤嵌套关联） */
+  cellIds: string[];
 };
 
 export type StoreDayRegionGroup = {
@@ -99,9 +101,13 @@ export function groupStorePublishedScheduleByDate(
     if (!byArea.has(areaName)) byArea.set(areaName, new Map());
     const byShift = byArea.get(areaName)!;
     const key = shiftGroupKey(shiftName, range, isSubstitution);
+    const cellId = String(item.id);
     const existing = byShift.get(key);
     if (existing) {
       existing.staff = mergeStaff(existing.staff, staff);
+      if (!existing.cellIds.includes(cellId)) {
+        existing.cellIds.push(cellId);
+      }
       if (!existing.originalDisplayName && originalDisplayName) {
         existing.originalDisplayName = originalDisplayName;
       }
@@ -112,6 +118,7 @@ export function groupStorePublishedScheduleByDate(
         isSubstitution,
         originalDisplayName,
         staff,
+        cellIds: [cellId],
       });
     }
   }

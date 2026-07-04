@@ -23,7 +23,10 @@ import {
   groupPublishedScheduleByDate,
   type MyPublishedShiftSlot,
 } from '../../src/api/mapPublishedSchedule';
-import { normalizeSubmitReason } from '../../src/api/mapAttendanceRequest';
+import { normalizeSubmitReason, buildLeaveItemsPayload } from '../../src/api/mapAttendanceRequest';
+import { previewLeaveFieldImpacts } from '../../src/api/attendance';
+import type { AppAttendanceFieldImpact } from '../../src/api/types';
+import { FieldImpactPreviewList } from '../../src/components/FieldImpactPreviewList';
 import { fetchMyPublishedSchedule } from '../../src/api/schedule';
 import { TimeSelectField } from '../../src/components/TimeSelectField';
 import type { LeaveRequest } from '../../src/context/AuthContext';
@@ -32,6 +35,13 @@ import { colors } from '../../src/theme/colors';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
+import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import { findOpenFieldLeaveRequest } from '../../src/utils/fieldLeaveEligibility';
+import { confirmRequiredFieldImpacts, visibleFieldImpacts } from '../../src/utils/leaveFieldImpact';
+import {
+  buildLeaveTimesByScheduleKey,
+  resolveEffectiveLeaveScope,
+} from '../../src/utils/leaveScopeResolve';
 import {
   getShiftLeaveBlockReason,
   hasOpenLeaveForShift,
@@ -70,6 +80,7 @@ import {
   canApplyFieldMissedPunchKind,
   canApplyFieldMissedPunchOut,
   fieldJobScheduledRange,
+  fieldJobWorkDate,
   findOpenFieldMissedPunchRequest,
 } from '../../src/utils/fieldMissedPunchEligibility';
 import type { TimelineFieldJobItem } from '../../src/types/fieldService';
@@ -160,14 +171,17 @@ export default function RequestCreateScreen() {
   >({});
   /** 提交成功准备跳转时关闭时间滚轮，避免 Android Modal 与页面卸载竞态 */
   const [leavePickersEnabled, setLeavePickersEnabled] = useState(true);
+  const [fieldImpactPreview, setFieldImpactPreview] = useState<AppAttendanceFieldImpact[]>([]);
+  const [fieldImpactPreviewLoading, setFieldImpactPreviewLoading] = useState(false);
   const closingAfterSubmitRef = useRef(false);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
-  const isFieldMissedPunch =
-    sanitizeRouteParam(params.source) === 'field' && type === 'missed_punch';
+  const isFieldFromRoute = sanitizeRouteParam(params.source) === 'field';
+  const isFieldMissedPunch = isFieldFromRoute && type === 'missed_punch';
+  const isFieldLeave = isFieldFromRoute && type === 'leave';
 
   const fieldJobFromRoute = useMemo((): TimelineFieldJobItem | null => {
-    if (!isFieldMissedPunch) return null;
+    if (!isFieldFromRoute) return null;
     const id = sanitizeRouteParam(params.fieldJobId);
     if (!id) return null;
     return {
@@ -183,7 +197,7 @@ export default function RequestCreateScreen() {
       syncStoreClockIn: sanitizeRouteParam(params.syncStoreClockIn) === '1',
       syncStoreClockOut: sanitizeRouteParam(params.syncStoreClockOut) === '1',
     };
-  }, [isFieldMissedPunch, params]);
+  }, [isFieldFromRoute, params]);
 
   const daySlots = useMemo(() => requestScheduleContext?.slots ?? [], [requestScheduleContext]);
   const selectedSlot = daySlots[slotIndex];
@@ -410,6 +424,12 @@ export default function RequestCreateScreen() {
     [publishedScheduleByDate, leaveFocusDay],
   );
 
+  const isFullLeaveBlocked = useCallback(
+    (slot: MyPublishedShiftSlot, workDate: string) =>
+      isFullLeaveBlockedForShift(myAttendanceRequests, workDate, slot, getShiftPunch(workDate, slot)),
+    [getShiftPunch, myAttendanceRequests],
+  );
+
   useEffect(() => {
     if (type !== 'leave') return;
     setLeaveScopeByKey((prev) => {
@@ -442,8 +462,11 @@ export default function RequestCreateScreen() {
       const next = { ...prev };
       let changed = false;
       for (const key of Object.keys(selectedShiftKeys)) {
-        if ((leaveScopeByKey[key] ?? 'full') !== 'partial' || next[key]) continue;
         const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+        const fullBlocked = found ? isFullLeaveBlocked(found.slot, found.workDate) : false;
+        if (resolveEffectiveLeaveScope(key, leaveScopeByKey, fullBlocked) !== 'partial' || next[key]) {
+          continue;
+        }
         if (!found) continue;
         const punch = getShiftPunch(found.workDate, found.slot);
         const def = defaultPartialLeaveForPunch(punch, found.slot.range);
@@ -454,15 +477,16 @@ export default function RequestCreateScreen() {
       }
       return changed ? next : prev;
     });
-  }, [type, selectedShiftKeys, leaveScopeByKey, publishedScheduleByDate, getShiftPunch]);
+  }, [type, selectedShiftKeys, leaveScopeByKey, publishedScheduleByDate, getShiftPunch, isFullLeaveBlocked]);
 
   const leavePartialValid = useMemo(() => {
     if (type !== 'leave') return true;
     for (const shift of selectedLeaveShifts) {
       const key = shiftSelectionKeyFromBinding(shift);
-      if ((leaveScopeByKey[key] ?? 'full') !== 'partial') continue;
       const found = findSlotForSelectionKey(publishedScheduleByDate, key);
       if (!found) return false;
+      const fullBlocked = isFullLeaveBlocked(found.slot, found.workDate);
+      if (resolveEffectiveLeaveScope(key, leaveScopeByKey, fullBlocked) !== 'partial') continue;
       const punch = getShiftPunch(found.workDate, found.slot);
       const scenario = resolvePartialLeaveScenario(punch, found.slot.range);
       const partialDefault =
@@ -478,6 +502,54 @@ export default function RequestCreateScreen() {
     partialLeaveByKey,
     publishedScheduleByDate,
     getShiftPunch,
+    isFullLeaveBlocked,
+  ]);
+
+  useEffect(() => {
+    if (type !== 'leave' || isFieldLeave || !supportsLeaveFieldV1() || !selectedStoreId) {
+      setFieldImpactPreview([]);
+      return;
+    }
+    const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
+    if (shifts.length === 0) {
+      setFieldImpactPreview([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        setFieldImpactPreviewLoading(true);
+        try {
+          const leaveTimesByScheduleKey = buildLeaveTimesByScheduleKey(
+            shifts,
+            publishedScheduleByDate,
+            leaveScopeByKey,
+            partialLeaveByKey,
+            getShiftPunch,
+            isFullLeaveBlocked,
+          );
+          const leaveItems = buildLeaveItemsPayload(shifts, { leaveTimesByScheduleKey });
+          const preview = await previewLeaveFieldImpacts(selectedStoreId, { leaveItems });
+          if (!cancelled) setFieldImpactPreview(visibleFieldImpacts(preview.fieldImpacts));
+        } catch {
+          if (!cancelled) setFieldImpactPreview([]);
+        } finally {
+          if (!cancelled) setFieldImpactPreviewLoading(false);
+        }
+      })();
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    type,
+    isFieldLeave,
+    selectedStoreId,
+    selectedShiftKeys,
+    leaveScopeByKey,
+    partialLeaveByKey,
+    publishedScheduleByDate,
   ]);
 
   /** 打卡加载后，将已选部分时段限制在可请假范围内 */
@@ -487,8 +559,11 @@ export default function RequestCreateScreen() {
       let changed = false;
       const next = { ...prev };
       for (const key of Object.keys(selectedShiftKeys)) {
-        if ((leaveScopeByKey[key] ?? 'full') !== 'partial' || !next[key]) continue;
         const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+        const fullBlocked = found ? isFullLeaveBlocked(found.slot, found.workDate) : false;
+        if (resolveEffectiveLeaveScope(key, leaveScopeByKey, fullBlocked) !== 'partial' || !next[key]) {
+          continue;
+        }
         if (!found) continue;
         const punch = getShiftPunch(found.workDate, found.slot);
         const scenario = resolvePartialLeaveScenario(punch, found.slot.range);
@@ -533,12 +608,6 @@ export default function RequestCreateScreen() {
     (slot: MyPublishedShiftSlot, workDate: string) =>
       getLeaveBlockReason(slot, workDate) !== 'none',
     [getLeaveBlockReason],
-  );
-
-  const isFullLeaveBlocked = useCallback(
-    (slot: MyPublishedShiftSlot, workDate: string) =>
-      isFullLeaveBlockedForShift(myAttendanceRequests, workDate, slot, getShiftPunch(workDate, slot)),
-    [getShiftPunch, myAttendanceRequests],
   );
 
   const leaveBlockAlertMessage = useCallback(
@@ -880,6 +949,64 @@ export default function RequestCreateScreen() {
     try {
     const reasonText = normalizeSubmitReason(reason);
     if (type === 'leave') {
+      if (isFieldLeave) {
+        if (!fieldJobFromRoute) return;
+        if (findOpenFieldLeaveRequest(myAttendanceRequests, fieldJobFromRoute.id)) {
+          Alert.alert(t('typeFieldLeave'), t('fieldJobLeaveAlreadyPending'));
+          return;
+        }
+        setSubmitBusy(true);
+        let acknowledgedFieldJobIds: number[] | undefined;
+        if (supportsLeaveFieldV2() && selectedStoreId) {
+          try {
+            const jobId = Number(fieldJobFromRoute.id);
+            if (!Number.isFinite(jobId) || jobId <= 0) throw new Error(t('requestSubmitFailed'));
+            const preview = await previewLeaveFieldImpacts(selectedStoreId, { fieldJobId: jobId });
+            const ack = await confirmRequiredFieldImpacts(
+              preview.fieldImpacts ?? [],
+              t,
+              i18n.language,
+            );
+            if (ack === null) {
+              setSubmitBusy(false);
+              return;
+            }
+            if (ack.length > 0) acknowledgedFieldJobIds = ack;
+          } catch (e) {
+            setSubmitBusy(false);
+            const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+            Alert.alert(t('typeFieldLeave'), message);
+            return;
+          }
+        }
+        const res = await submitAttendanceRequest({
+          type: 'leave',
+          source: 'field',
+          reason: reasonText,
+          fieldJobId: fieldJobFromRoute.id,
+          workDate: fieldJobWorkDate(fieldJobFromRoute),
+          acknowledgedFieldJobIds,
+        });
+        if (!res.ok) {
+          setSubmitBusy(false);
+          Alert.alert(t('typeFieldLeave'), res.message ?? t('requestSubmitFailed'));
+          return;
+        }
+        setLeavePickersEnabled(false);
+        closingAfterSubmitRef.current = true;
+        await refreshAttendanceRequests();
+        setSubmitBusy(false);
+        Keyboard.dismiss();
+        const navigate = () => router.replace('/requests');
+        if (Platform.OS === 'android') {
+          InteractionManager.runAfterInteractions(() => {
+            setTimeout(() => requestAnimationFrame(navigate), 300);
+          });
+        } else {
+          InteractionManager.runAfterInteractions(() => requestAnimationFrame(navigate));
+        }
+        return;
+      }
       const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
       if (shifts.length === 0) return;
       const duplicateLeave = shifts.find((shift) =>
@@ -895,35 +1022,52 @@ export default function RequestCreateScreen() {
       }
       const blockedFullLeave = shifts.find((shift) => {
         const key = shiftSelectionKeyFromBinding(shift);
-        if ((leaveScopeByKey[key] ?? 'full') !== 'full') return false;
         const found = findSlotForSelectionKey(publishedScheduleByDate, key);
+        const fullBlocked = found ? isFullLeaveBlocked(found.slot, found.workDate) : false;
+        if (resolveEffectiveLeaveScope(key, leaveScopeByKey, fullBlocked) !== 'full') return false;
         return found ? isFullLeaveBlocked(found.slot, found.workDate) : false;
       });
       if (blockedFullLeave) {
         Alert.alert(t('typeLeave'), t('leaveFullShiftBlocked'));
         return;
       }
-      const leaveTimesByScheduleKey: Record<string, { mode: 'full' | 'partial'; from?: string; to?: string }> =
-        {};
-      for (const shift of shifts) {
-        const key = shiftSelectionKeyFromBinding(shift);
-        const scope = leaveScopeByKey[key] ?? 'full';
-        if (scope === 'partial') {
-          const found = findSlotForSelectionKey(publishedScheduleByDate, key);
-          const punch = found ? getShiftPunch(found.workDate, found.slot) : undefined;
-          const def =
-            found && defaultPartialLeaveForPunch(punch, found.slot.range);
-          const p = partialLeaveByKey[key] ?? def;
-          if (p?.from && p?.to) {
-            leaveTimesByScheduleKey[key] = { mode: 'partial', from: p.from, to: p.to };
-          } else {
-            leaveTimesByScheduleKey[key] = { mode: 'full' };
+      const leaveTimesByScheduleKey = buildLeaveTimesByScheduleKey(
+        shifts,
+        publishedScheduleByDate,
+        leaveScopeByKey,
+        partialLeaveByKey,
+        getShiftPunch,
+        isFullLeaveBlocked,
+      );
+      setSubmitBusy(true);
+      let acknowledgedFieldJobIds: number[] | undefined;
+      if (supportsLeaveFieldV1() && selectedStoreId) {
+        try {
+          const leaveItems = buildLeaveItemsPayload(shifts, {
+            leaveTimesByScheduleKey,
+            leaveTime:
+              shifts.length === 1
+                ? leaveTimesByScheduleKey[shiftSelectionKeyFromBinding(shifts[0])]
+                : undefined,
+          });
+          const preview = await previewLeaveFieldImpacts(selectedStoreId, { leaveItems });
+          const ack = await confirmRequiredFieldImpacts(
+            visibleFieldImpacts(preview.fieldImpacts),
+            t,
+            i18n.language,
+          );
+          if (ack === null) {
+            setSubmitBusy(false);
+            return;
           }
-        } else {
-          leaveTimesByScheduleKey[key] = { mode: 'full' };
+          if (ack.length > 0) acknowledgedFieldJobIds = ack;
+        } catch (e) {
+          setSubmitBusy(false);
+          const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+          Alert.alert(t('typeLeave'), message);
+          return;
         }
       }
-      setSubmitBusy(true);
       const res = await submitAttendanceRequest({
         type: 'leave',
         reason: reasonText,
@@ -933,6 +1077,7 @@ export default function RequestCreateScreen() {
           shifts.length === 1
             ? leaveTimesByScheduleKey[shiftSelectionKeyFromBinding(shifts[0])]
             : undefined,
+        acknowledgedFieldJobIds,
       });
       if (!res.ok) {
         setSubmitBusy(false);
@@ -1035,7 +1180,11 @@ export default function RequestCreateScreen() {
     }
   };
 
-  const pageTitle = type === 'missed_punch' ? t('typeMissedPunch') : t('typeLeave');
+  const pageTitle = isFieldLeave
+    ? t('typeFieldLeave')
+    : type === 'missed_punch'
+      ? t('typeMissedPunch')
+      : t('typeLeave');
   const scrollRef = useRef<ScrollView>(null);
   const reasonWrapRef = useRef<View>(null);
   const scrollYRef = useRef(0);
@@ -1095,10 +1244,36 @@ export default function RequestCreateScreen() {
   const canSubmit =
     !submitBusy &&
     (type === 'leave'
-      ? selectedLeaveCount > 0 && leavePartialValid
+      ? isFieldLeave
+        ? !!fieldJobFromRoute && !!normalizeSubmitReason(reason)
+        : selectedLeaveCount > 0 && leavePartialValid
       : isFieldMissedPunch
         ? !!fieldJobFromRoute && !blockingMissedPunch
         : daySlots.length > 0 && !!selectedSlot && !blockingMissedPunch);
+
+  const renderFieldLeaveForm = () => {
+    if (!fieldJobFromRoute) {
+      return <Text style={styles.warn}>{t('fieldJobLeaveMissing')}</Text>;
+    }
+    const range = fieldJobScheduledRange(fieldJobFromRoute);
+    return (
+      <>
+        <Text style={styles.label}>{t('requestWorkDate')}</Text>
+        <Text style={styles.dateReadonly}>{formatPunchHeaderDate(workDate, i18n.language)}</Text>
+        <Text style={styles.label}>{t('fieldJobLeaveTarget')}</Text>
+        <View style={styles.slotCard}>
+          <Text style={styles.slotCardTitle}>
+            {fieldJobFromRoute.customerName || t('todayTimelineFieldJob')}
+          </Text>
+          <Text style={styles.slotCardTime}>{range}</Text>
+          {fieldJobFromRoute.serviceAddress ? (
+            <Text style={styles.slotCardTime}>{fieldJobFromRoute.serviceAddress}</Text>
+          ) : null}
+        </View>
+        <Text style={styles.leaveCalendarHint}>{t('fieldJobLeaveHint')}</Text>
+      </>
+    );
+  };
 
   const renderFieldMissedPunchForm = () => {
     if (!fieldJobFromRoute) {
@@ -1418,7 +1593,7 @@ export default function RequestCreateScreen() {
               const punchLine = formatShiftPunchLine(punch, i18n.language);
               const fullLeaveBlocked = isFullLeaveBlocked(slot, leaveFocusDay);
               const partialScenario = resolvePartialLeaveScenario(punch, slot.range);
-              const scope = leaveScopeByKey[key] ?? (fullLeaveBlocked ? 'partial' : 'full');
+              const scope = resolveEffectiveLeaveScope(key, leaveScopeByKey, fullLeaveBlocked);
               const partialDefault =
                 partialScenario && defaultPartialLeaveForPunch(punch, slot.range);
               const partial =
@@ -1579,6 +1754,17 @@ export default function RequestCreateScreen() {
         {selectedLeaveCount === 0 && focusedSlots.length > 0 ? (
           <Text style={styles.leaveTimeHint}>{t('leaveTimePickShiftHint')}</Text>
         ) : null}
+
+        {supportsLeaveFieldV1() && (fieldImpactPreviewLoading || fieldImpactPreview.length > 0) ? (
+          <View style={styles.fieldImpactPanel}>
+            <Text style={styles.fieldImpactTitle}>{t('leaveFieldImpactSection')}</Text>
+            {fieldImpactPreviewLoading ? (
+              <ActivityIndicator color={colors.primary} style={styles.fieldImpactLoading} />
+            ) : (
+              <FieldImpactPreviewList impacts={fieldImpactPreview} />
+            )}
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -1616,7 +1802,9 @@ export default function RequestCreateScreen() {
               ? isFieldMissedPunch
                 ? renderFieldMissedPunchForm()
                 : renderMissedPunchForm()
-              : renderLeaveForm()}
+              : isFieldLeave
+                ? renderFieldLeaveForm()
+                : renderLeaveForm()}
 
             <View ref={reasonWrapRef} collapsable={false}>
               <Text style={styles.label}>{t('reason')}</Text>
@@ -1779,6 +1967,19 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   leaveCalendarHint: { marginTop: 10, fontSize: 12, color: colors.textMuted, lineHeight: 17 },
+  fieldImpactPanel: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#F0F9FF',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  fieldImpactTitle: { fontSize: 13, fontWeight: '800', color: colors.text },
+  fieldImpactBody: { marginTop: 6, fontSize: 12, color: colors.textMuted, lineHeight: 18 },
+  fieldImpactRequiredHint: { marginTop: 8, fontSize: 12, fontWeight: '700', color: colors.warning },
+  fieldImpactOptionalHint: { marginTop: 8, fontSize: 12, color: colors.textMuted },
+  fieldImpactLoading: { marginTop: 8 },
   dayCellWeek: {
     fontSize: 10,
     fontWeight: '700',

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -200,6 +200,13 @@ export default function ScheduleScreen() {
     if (!session?.user || !selectedStoreId) return;
     void refreshAttendanceRequests();
   }, [session?.user?.selectedStoreId, refreshAttendanceRequests]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!session?.user?.selectedStoreId) return;
+      void refreshAttendanceRequests();
+    }, [session?.user?.selectedStoreId, refreshAttendanceRequests]),
+  );
 
   useEffect(() => {
     if (!session?.user || !selectedStoreId) return;

@@ -155,11 +155,13 @@ export type RequestShiftBinding = {
 export type LeaveRequest = {
   id: string;
   type: 'leave' | 'missed_punch';
-  /** shift=按班次 date_range=按日期 */
-  leaveMode?: 'shift' | 'date_range';
+  /** shift=按班次 date_range=按日期 field_job=外勤请假 */
+  leaveMode?: 'shift' | 'date_range' | 'field_job';
   /** 提交人（演示/对接审批用） */
   applicantId?: string;
   applicantName?: string;
+  /** 指定审批人 */
+  approverId?: string;
   /** 提交时所在门店 */
   storeId?: string;
   /** 与 shift.workDate 相同，便于列表排序 */
@@ -259,6 +261,7 @@ type AuthContextValue = {
     approved: boolean,
     reviewComment?: string,
     substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
+    fieldDispositions?: import('../api/types').FieldLeaveDispositionRequest[],
   ) => Promise<{ ok: boolean; message?: string }>;
   /** 撤回本人待审批申请 */
   cancelAttendanceRequest: (id: string) => Promise<{ ok: boolean; message?: string }>;
@@ -901,6 +904,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       approved: boolean,
       reviewComment?: string,
       substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
+      fieldDispositions?: import('../api/types').FieldLeaveDispositionRequest[],
     ): Promise<{ ok: boolean; message?: string }> => {
       const storeId = session?.user.selectedStoreId;
       if (!storeId) {
@@ -915,6 +919,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           approved,
           reviewComment: trimmed,
           substitutions: substitutions?.length ? substitutions : undefined,
+          fieldDispositions: fieldDispositions?.length ? fieldDispositions : undefined,
         });
         await refreshAttendanceRequests();
         return { ok: true };

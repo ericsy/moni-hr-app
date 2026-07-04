@@ -144,6 +144,31 @@ export type AppStorePublishedSchedule = {
   items: AppStoreScheduleItem[];
 };
 
+export type AppStoreFieldJobAssignee = {
+  id: number;
+  name: string;
+};
+
+export type AppStoreFieldJobItem = {
+  id: number;
+  date_str: string;
+  startTime: string;
+  endTime: string;
+  customerName: string;
+  serviceAddress: string;
+  serviceType?: string | null;
+  status?: string | null;
+  syncStoreClockIn?: boolean | null;
+  syncStoreClockOut?: boolean | null;
+  linkedStoreShiftId?: number | null;
+  assignees: AppStoreFieldJobAssignee[];
+};
+
+export type AppStorePublishedFieldJobs = {
+  storeId: number;
+  items: AppStoreFieldJobItem[];
+};
+
 export type AppClockPunchRequest = {
   publishedCellId: number;
   punchType: 'clock_in' | 'clock_out';
@@ -193,9 +218,41 @@ export type AppAttendanceLeaveItemRequest = {
   partialEndTime?: string;
 };
 
+export type FieldLeaveDispositionRequest = {
+  fieldJobId: number;
+  /** cancel | reassign */
+  action: 'cancel' | 'reassign';
+  assigneeMerchantAdminId?: number;
+};
+
+export type AppAttendanceFieldImpact = {
+  id?: number;
+  leaveItemId?: number;
+  fieldJobId: number;
+  linkedStoreShiftId?: number | null;
+  /** none | partial | full */
+  overlapType?: string;
+  /** none | required */
+  requiredAction?: string;
+  customerName?: string;
+  serviceType?: string;
+  scheduledStart?: string;
+  scheduledEnd?: string;
+  syncStoreClockIn?: boolean;
+  syncStoreClockOut?: boolean;
+};
+
+export type AppAttendanceFieldDisposition = {
+  id?: number;
+  fieldJobId: number;
+  action?: string;
+  assigneeMerchantAdminId?: number | null;
+  source?: string;
+};
+
 export type AppAttendanceRequestCreate = {
   requestType: 'leave' | 'missed_punch';
-  leaveMode?: 'shift' | 'date_range';
+  leaveMode?: 'shift' | 'date_range' | 'field_job';
   leaveDateFrom?: string;
   leaveDateTo?: string;
   reason: string;
@@ -210,6 +267,9 @@ export type AppAttendanceRequestCreate = {
   actualPunchedAt?: string;
   overnightPairCellId?: number;
   overnightRole?: 'start' | 'end';
+  /** 新版：已确认须处置的外勤 fieldJobId */
+  acknowledgedFieldJobIds?: number[];
+  fieldDispositions?: FieldLeaveDispositionRequest[];
 };
 
 export type ScheduleSubstitutionBrief = {
@@ -246,7 +306,7 @@ export type AppAttendanceRequest = {
   id: number;
   storeId: number;
   requestType: string;
-  leaveMode?: 'shift' | 'date_range' | string;
+  leaveMode?: 'shift' | 'date_range' | 'field_job' | string;
   leaveDateFrom?: string | null;
   leaveDateTo?: string | null;
   status: string;
@@ -273,6 +333,8 @@ export type AppAttendanceRequest = {
   applicantMerchantAdminId?: number;
   applicantName?: string;
   leaveItems?: AppAttendanceLeaveItem[];
+  fieldImpacts?: AppAttendanceFieldImpact[];
+  fieldDispositions?: AppAttendanceFieldDisposition[];
 };
 
 export type AppAttendanceRequestList = {
@@ -287,6 +349,7 @@ export type AppAttendanceRequestReview = {
   approved: boolean;
   reviewComment?: string;
   substitutions?: LeaveSubstitutionReviewItem[];
+  fieldDispositions?: FieldLeaveDispositionRequest[];
 };
 
 export type MerchantEmployeeBrief = {

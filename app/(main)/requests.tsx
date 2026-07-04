@@ -12,7 +12,6 @@ import {
   View,
 } from 'react-native';
 
-import { AttendanceReviewPrompt } from '../../src/components/AttendanceReviewPrompt';
 import type { LeaveRequest } from '../../src/context/AuthContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
@@ -21,7 +20,7 @@ import {
   shiftSelectionKeyFromBinding,
 } from '../../src/utils/requestShiftBinding';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
-import { countPendingApprovals, shouldSplitRequestViews } from '../../src/utils/requestApproval';
+import { countPendingApprovalsForManager, shouldSplitRequestViews } from '../../src/utils/requestApproval';
 
 function statusColor(status: LeaveRequest['status']) {
   if (status === 'approved') return colors.success;
@@ -39,9 +38,47 @@ function statusLabel(status: LeaveRequest['status'], t: (k: string) => string) {
 }
 
 function requestTypeLabel(item: LeaveRequest, t: (k: string) => string) {
+  if (item.type === 'leave' && item.leaveMode === 'field_job') return t('typeFieldLeave');
   if (item.type === 'leave' && item.leaveMode === 'date_range') return t('dateLeaveTitle');
   if (item.type === 'leave') return t('typeLeave');
   return t('typeMissedPunch');
+}
+
+function formatLeaveWorkDateValue(item: LeaveRequest, t: (k: string) => string): string {
+  return item.start === item.end
+    ? item.start
+    : t('leaveDateSpan', { start: item.start, end: item.end });
+}
+
+function renderLabeledMetaRow(
+  label: string,
+  value: string,
+  options?: { numberOfLines?: number },
+) {
+  return (
+    <View style={styles.metaRow}>
+      <Text style={styles.metaRowLabel}>{label}:</Text>
+      <Text numberOfLines={options?.numberOfLines} style={styles.metaRowValue}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function renderFieldJobListMeta(
+  fieldJob: NonNullable<LeaveRequest['fieldJob']>,
+  t: (k: string) => string,
+) {
+  const range = fieldJob.scheduledRange?.trim();
+  const showRange = Boolean(range && range !== '—');
+  const address = fieldJob.serviceAddress?.trim();
+  return (
+    <>
+      {renderLabeledMetaRow(t('fieldJobLeaveTarget'), fieldJob.customerName)}
+      {showRange ? renderLabeledMetaRow(t('requestShiftSegment'), range!) : null}
+      {address ? renderLabeledMetaRow(t('fieldJobAddressLabel'), address, { numberOfLines: 2 }) : null}
+    </>
+  );
 }
 
 export default function RequestsScreen() {
@@ -52,12 +89,9 @@ export default function RequestsScreen() {
     approvalAttendanceRequests,
     selectedStoreHasStoreManager,
     refreshAttendanceRequests,
-    reviewAttendanceRequest,
   } = useAuth();
   const [listTab, setListTab] = useState<'approvals' | 'mine'>('mine');
   const [listLoading, setListLoading] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState<{ id: string; approved: boolean } | null>(null);
-  const [reviewBusy, setReviewBusy] = useState(false);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const user = session?.user;
@@ -73,8 +107,8 @@ export default function RequestsScreen() {
   );
 
   const pendingApprovalCount = useMemo(
-    () => countPendingApprovals(approvalAttendanceRequests),
-    [approvalAttendanceRequests],
+    () => countPendingApprovalsForManager(approvalAttendanceRequests, user?.id),
+    [approvalAttendanceRequests, user?.id],
   );
 
   const listData = useMemo(() => {
@@ -120,33 +154,17 @@ export default function RequestsScreen() {
     }
   }, [splitRequestViews, pendingApprovalCount]);
 
-  const submitReview = async (reviewComment: string) => {
-    if (!reviewTarget) return;
-    setReviewBusy(true);
-    const res = await reviewAttendanceRequest(
-      reviewTarget.id,
-      reviewTarget.approved,
-      reviewComment,
-    );
-    setReviewBusy(false);
-    if (!res.ok) {
-      Alert.alert(t('requestsRecords'), res.message ?? t('requestReviewFailed'));
-      return;
-    }
-    setReviewTarget(null);
-  };
-
-  const openRequestDetail = (item: LeaveRequest, showApprovalActions: boolean) => {
+  const openRequestDetail = (item: LeaveRequest) => {
     router.push({
       pathname: '/request-detail',
-      params: { id: item.id, approval: showApprovalActions ? '1' : '0' },
+      params: { id: item.id },
     });
   };
 
-  const renderRequestCard = (item: LeaveRequest, showApprovalActions: boolean) => (
+  const renderRequestCard = (item: LeaveRequest, fromApprovalsTab: boolean) => (
     <View style={styles.card}>
       <Pressable
-        onPress={() => openRequestDetail(item, showApprovalActions)}
+        onPress={() => openRequestDetail(item)}
         style={({ pressed }) => [styles.cardBody, pressed && styles.cardPressed]}
       >
       <View style={styles.cardTop}>
@@ -157,41 +175,64 @@ export default function RequestsScreen() {
           </Text>
         </View>
       </View>
-      {showApprovalActions && item.applicantName ? (
+      {fromApprovalsTab && item.applicantName ? (
         <Text style={styles.meta}>
           {t('requestsApplicant')}: {item.applicantName}
         </Text>
       ) : null}
       {item.type === 'leave' ? (
-        <>
-          <Text style={styles.meta}>
-            {item.start === item.end
-              ? t('requestWorkDate') + ': ' + item.start
-              : t('leaveDateSpan', { start: item.start, end: item.end })}
-          </Text>
-          {(item.leaveMode === 'date_range' || item.shifts.length === 0) ? null : (
+        item.leaveMode === 'field_job' && item.fieldJob ? (
+          <>
+            {renderLabeledMetaRow(t('requestWorkDate'), formatLeaveWorkDateValue(item, t))}
+            {renderFieldJobListMeta(item.fieldJob, t)}
+          </>
+        ) : (
+          <>
             <Text style={styles.meta}>
-              {t('leaveShiftCount', { count: item.shifts.length })}
+              {t('requestWorkDate') + ': '}
+              {item.start === item.end
+                ? item.start
+                : t('leaveDateSpan', { start: item.start, end: item.end })}
             </Text>
+            {(item.leaveMode === 'date_range' || item.shifts.length === 0) ? null : (
+              <>
+                <Text style={styles.meta}>
+                  {t('leaveShiftCount', { count: item.shifts.length })}
+                </Text>
+                {item.shifts.map((s) => (
+                  <Text key={shiftSelectionKeyFromBinding(s)} style={styles.metaSub}>
+                    · {s.workDate} {formatShiftBindingLine(s)}
+                    {item.shifts.length === 1 &&
+                    item.leaveTime?.mode === 'partial' &&
+                    item.leaveTime.from &&
+                    item.leaveTime.to
+                      ? ` · ${t('leaveTimeSpan', { from: item.leaveTime.from, to: item.leaveTime.to })}`
+                      : ''}
+                  </Text>
+                ))}
+              </>
+            )}
+          </>
+        )
+      ) : item.fieldJob ? (
+        <>
+          {renderLabeledMetaRow(
+            t('requestWorkDate'),
+            item.shifts[0]?.workDate ?? item.start,
           )}
-          {(item.leaveMode === 'date_range' || item.shifts.length === 0) ? null : (
-            item.shifts.map((s) => (
-            <Text key={shiftSelectionKeyFromBinding(s)} style={styles.metaSub}>
-              · {s.workDate} {formatShiftBindingLine(s)}
-              {item.shifts.length === 1 &&
-              item.leaveTime?.mode === 'partial' &&
-              item.leaveTime.from &&
-              item.leaveTime.to
-                ? ` · ${t('leaveTimeSpan', { from: item.leaveTime.from, to: item.leaveTime.to })}`
-                : ''}
+          {renderFieldJobListMeta(item.fieldJob, t)}
+          {item.missedPunch ? (
+            <Text style={styles.meta}>
+              {t('missedPunchKind')}:{' '}
+              {item.missedPunch.punchKind === 'in' ? t('clockIn') : t('clockOut')} ·{' '}
+              {t('missedPunchProposedTime')}: {item.missedPunch.proposedTime}
             </Text>
-            ))
-          )}
+          ) : null}
         </>
       ) : (
         <>
           <Text style={styles.meta}>
-            {t('requestWorkDate')}: {item.shifts[0]?.workDate}
+            {t('requestWorkDate')}: {item.shifts[0]?.workDate ?? item.start}
           </Text>
           <Text style={styles.meta}>
             {t('requestShiftSegment')}:{' '}
@@ -211,24 +252,6 @@ export default function RequestsScreen() {
         <Ionicons color={colors.textMuted} name="chevron-forward" size={18} />
       </View>
       </Pressable>
-      {showApprovalActions && item.status === 'pending' ? (
-        <View style={styles.approvalActions}>
-          <Pressable
-            accessibilityLabel={t('requestReject')}
-            onPress={() => setReviewTarget({ id: item.id, approved: false })}
-            style={styles.rejectBtn}
-          >
-            <Text style={styles.rejectBtnText}>{t('requestReject')}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel={t('requestApprove')}
-            onPress={() => setReviewTarget({ id: item.id, approved: true })}
-            style={styles.approveBtn}
-          >
-            <Text style={styles.approveBtnText}>{t('requestApprove')}</Text>
-          </Pressable>
-        </View>
-      ) : null}
     </View>
   );
 
@@ -311,14 +334,6 @@ export default function RequestsScreen() {
           renderItem={({ item }) =>
             renderRequestCard(item, splitRequestViews && listTab === 'approvals')
           }
-        />
-        <AttendanceReviewPrompt
-          busy={reviewBusy}
-          onClose={() => {
-            if (!reviewBusy) setReviewTarget(null);
-          }}
-          onConfirm={(reviewComment) => void submitReview(reviewComment)}
-          target={reviewTarget ? { approved: reviewTarget.approved } : null}
         />
       </View>
     </>
@@ -409,30 +424,23 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 11, fontWeight: '800' },
   meta: { marginTop: 8, color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   metaSub: { marginTop: 4, marginLeft: 4, color: colors.textMuted, fontSize: 12, lineHeight: 17 },
-  reason: { marginTop: 8, color: colors.text, fontSize: 14, lineHeight: 20 },
-  approvalActions: {
+  metaRow: {
     flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    paddingTop: 4,
+    alignItems: 'flex-start',
+    marginTop: 8,
   },
-  rejectBtn: {
+  metaRowLabel: {
+    width: 64,
+    flexShrink: 0,
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  metaRowValue: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.danger,
-    alignItems: 'center',
-    backgroundColor: colors.surface,
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
   },
-  rejectBtnText: { fontWeight: '800', color: colors.danger, fontSize: 14 },
-  approveBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-  },
-  approveBtnText: { fontWeight: '800', color: '#fff', fontSize: 14 },
+  reason: { marginTop: 8, color: colors.text, fontSize: 14, lineHeight: 20 },
 });

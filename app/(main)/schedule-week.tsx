@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -22,13 +22,18 @@ import {
   type MyPublishedShiftSlot,
 } from '../../src/api/mapPublishedSchedule';
 import {
+  groupStoreFieldJobsByDate,
+  type StoreDayFieldJob,
+} from '../../src/api/mapStoreFieldJobs';
+import {
   groupStorePublishedScheduleByDate,
   type StoreDayRegionGroup,
   type StoreRosterStaffEntry,
 } from '../../src/api/mapStorePublishedSchedule';
-import { fetchMyPublishedSchedule, fetchStorePublishedSchedule } from '../../src/api/schedule';
+import { fetchMyPublishedSchedule, fetchStorePublishedFieldJobs, fetchStorePublishedSchedule } from '../../src/api/schedule';
 import { FieldJobRow } from '../../src/components/FieldJobRow';
 import { MyShiftCard } from '../../src/components/MyShiftCard';
+import { StoreFieldJobCard } from '../../src/components/StoreFieldJobCard';
 import { getActiveStore, useAuth } from '../../src/context/AuthContext';
 import {
   getShiftLeaveRequestStatus,
@@ -50,6 +55,10 @@ import { fetchWorkSummariesByDates, resolveFieldJobsForSchedule } from '../../sr
 import type { TimelineFieldJobItem, TodayWorkSummary } from '../../src/types/fieldService';
 import { executeWorkPunch, workPunchMatchesStoreShift } from '../../src/utils/workPunch';
 import { canViewStoreRoster } from '../../src/utils/storeManagement';
+import {
+  buildStoreRosterTimeline,
+  storeTimelineHasContent,
+} from '../../src/utils/storeRosterTimeline';
 import {
   formatSelectedHeaderLine,
   weekNavigatorLabels,
@@ -79,12 +88,14 @@ function dayHasWork(
   myShiftsByDate: Record<string, MyPublishedShiftSlot[]>,
   storeRosterByDate: Record<string, StoreDayRegionGroup[]>,
   fieldJobsByDate: Record<string, TimelineFieldJobItem[]>,
+  storeFieldJobsByDate: Record<string, StoreDayFieldJob[]>,
 ): boolean {
   if (mode === 'my') {
     return (myShiftsByDate[iso]?.length ?? 0) > 0 || (fieldJobsByDate[iso]?.length ?? 0) > 0;
   }
   const roster = storeRosterByDate[iso] ?? [];
-  return roster.some((rg) => rg.shifts.some((sh) => sh.staff.length > 0));
+  const hasRoster = roster.some((rg) => rg.shifts.some((sh) => sh.staff.length > 0));
+  return hasRoster || (storeFieldJobsByDate[iso]?.length ?? 0) > 0;
 }
 
 function StoreRosterStaffPill({
@@ -169,6 +180,13 @@ export default function ScheduleWeekScreen() {
     if (!session?.user?.selectedStoreId) return;
     void refreshAttendanceRequests();
   }, [session?.user?.selectedStoreId, refreshAttendanceRequests]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!session?.user?.selectedStoreId) return;
+      void refreshAttendanceRequests();
+    }, [session?.user?.selectedStoreId, refreshAttendanceRequests]),
+  );
   const routeDateRaw = typeof params.date === 'string' ? params.date.trim() : '';
   const initialDate = /^\d{4}-\d{2}-\d{2}$/.test(routeDateRaw)
     ? routeDateRaw
@@ -188,6 +206,8 @@ export default function ScheduleWeekScreen() {
   >({});
   const [storeScheduleLoading, setStoreScheduleLoading] = useState(false);
   const [storeScheduleError, setStoreScheduleError] = useState<string | null>(null);
+  const [storeFieldJobsByDate, setStoreFieldJobsByDate] = useState<Record<string, StoreDayFieldJob[]>>({});
+  const [storeFieldJobsLoading, setStoreFieldJobsLoading] = useState(false);
   const [punchBusyId, setPunchBusyId] = useState<string | null>(null);
   const [fieldTimelineByDate, setFieldTimelineByDate] = useState<Record<string, TodayWorkSummary['timeline']>>({});
   const [workSummariesByDate, setWorkSummariesByDate] = useState<Record<string, TodayWorkSummary>>({});
@@ -261,6 +281,26 @@ export default function ScheduleWeekScreen() {
     }
   }, [selectedStoreId, canSeeStore, weekStartIso, weekEndIso, t]);
 
+  const loadStoreFieldJobsForWeek = useCallback(async () => {
+    if (!selectedStoreId || !canSeeStore) {
+      setStoreFieldJobsByDate({});
+      return;
+    }
+    setStoreFieldJobsLoading(true);
+    try {
+      const data = await fetchStorePublishedFieldJobs({
+        storeId: selectedStoreId,
+        from: weekStartIso,
+        to: weekEndIso,
+      });
+      setStoreFieldJobsByDate(groupStoreFieldJobsByDate(data.items ?? []));
+    } catch {
+      setStoreFieldJobsByDate({});
+    } finally {
+      setStoreFieldJobsLoading(false);
+    }
+  }, [selectedStoreId, canSeeStore, weekStartIso, weekEndIso]);
+
   const loadFieldJobsForWeek = useCallback(async () => {
     if (!selectedStoreId) {
       setFieldTimelineByDate({});
@@ -285,7 +325,8 @@ export default function ScheduleWeekScreen() {
   useEffect(() => {
     if (!session?.user || !selectedStoreId || !canSeeStore) return;
     void loadStoreSchedule();
-  }, [session?.user, selectedStoreId, canSeeStore, loadStoreSchedule]);
+    void loadStoreFieldJobsForWeek();
+  }, [session?.user, selectedStoreId, canSeeStore, loadStoreSchedule, loadStoreFieldJobsForWeek]);
 
   useEffect(() => {
     if (!session?.user || !selectedStoreId) return;
@@ -352,6 +393,15 @@ export default function ScheduleWeekScreen() {
     () => storeRosterByDate[selected] ?? [],
     [selected, storeRosterByDate],
   );
+  const storeDayFieldJobs = useMemo(
+    () => storeFieldJobsByDate[selected] ?? [],
+    [selected, storeFieldJobsByDate],
+  );
+  const storeDayTimeline = useMemo(
+    () => buildStoreRosterTimeline(storeDayRoster, storeDayFieldJobs, selected),
+    [storeDayRoster, storeDayFieldJobs, selected],
+  );
+  const storeDayHasContent = storeTimelineHasContent(storeDayTimeline);
 
   const selectedDateObj = useMemo(() => parseIsoToLocalDate(selected), [selected]);
   const dateLang = language ?? i18n.language;
@@ -379,7 +429,7 @@ export default function ScheduleWeekScreen() {
       refreshAttendanceRequests(),
     ];
     if (canSeeStore) {
-      tasks.push(loadStoreSchedule());
+      tasks.push(loadStoreSchedule(), loadStoreFieldJobsForWeek());
     }
     await Promise.all(tasks);
   }, [
@@ -390,6 +440,7 @@ export default function ScheduleWeekScreen() {
     refreshAttendanceRequests,
     canSeeStore,
     loadStoreSchedule,
+    loadStoreFieldJobsForWeek,
   ]);
 
   const onRefresh = useCallback(async () => {
@@ -543,7 +594,14 @@ export default function ScheduleWeekScreen() {
           {days.map((d) => {
             const active = d.iso === selected;
             const weekdayIdx = (d.date.getDay() + 6) % 7;
-            const hasWork = dayHasWork(d.iso, mode, myShiftsByDate, storeRosterByDate, fieldJobsByDate);
+            const hasWork = dayHasWork(
+              d.iso,
+              mode,
+              myShiftsByDate,
+              storeRosterByDate,
+              fieldJobsByDate,
+              storeFieldJobsByDate,
+            );
             return (
               <Pressable
                 key={d.iso}
@@ -575,7 +633,7 @@ export default function ScheduleWeekScreen() {
 
       <View style={styles.panel}>
         {mode === 'store' ? (
-          storeScheduleLoading && storeDayRoster.length === 0 ? (
+          (storeScheduleLoading || storeFieldJobsLoading) && !storeDayHasContent ? (
             <View style={styles.emptyWrap}>
               <ActivityIndicator color={colors.primary} size="large" />
               <Text style={styles.empty}>{t('scheduleLoading')}</Text>
@@ -588,7 +646,7 @@ export default function ScheduleWeekScreen() {
                 <Text style={styles.retryBtnText}>{t('retry')}</Text>
               </Pressable>
             </View>
-          ) : storeDayRoster.length === 0 ? (
+          ) : !storeDayHasContent ? (
             <View style={styles.emptyWrap}>
               <Ionicons color={colors.textMuted} name="calendar-outline" size={48} />
               <Text style={styles.empty}>{t('storeDayRosterEmpty')}</Text>
@@ -596,14 +654,21 @@ export default function ScheduleWeekScreen() {
           ) : (
             <View style={styles.list}>
               <View style={styles.storeDayView}>
-                {storeDayRoster.map((rg) => (
-                  <View key={rg.areaName} style={styles.storeRegionCard}>
-                    <Text style={styles.storeRegionTitle}>{rg.areaName}</Text>
-                    {rg.shifts.map((sh, si) => (
-                      <View
-                        key={`${rg.areaName}-${sh.shiftName}-${sh.range}-${sh.isSubstitution}-${si}`}
-                        style={[styles.storeShiftGroup, si > 0 && styles.storeShiftGroupBorder]}
-                      >
+                {storeDayTimeline.map((entry, entryIndex) => {
+                  if (entry.kind === 'field_job') {
+                    return <StoreFieldJobCard key={`field-${entry.job.id}`} job={entry.job} />;
+                  }
+                  const sh = entry.shift;
+                  return (
+                    <View
+                      key={`${entry.areaName}-${sh.shiftName}-${sh.range}-${sh.isSubstitution}-${entryIndex}`}
+                      style={[
+                        styles.storeRegionCard,
+                        entryIndex > 0 && styles.storeTimelineCardGap,
+                      ]}
+                    >
+                      <Text style={styles.storeRegionTitle}>{entry.areaName}</Text>
+                      <View style={styles.storeShiftGroup}>
                         <View style={styles.storeShiftHead}>
                           <View style={styles.storeShiftLabelWrap}>
                             <Text style={styles.storeShiftLabel}>{sh.shiftName}</Text>
@@ -626,19 +691,26 @@ export default function ScheduleWeekScreen() {
                           {sh.staff.length === 0 ? (
                             <Text style={styles.storeStaffEmpty}>{t('storeChipNoAssignments')}</Text>
                           ) : (
-                            sh.staff.map((entry) => (
+                            sh.staff.map((staffEntry) => (
                               <StoreRosterStaffPill
-                                key={`${rg.areaName}-${si}-${entry.id}`}
-                                entry={entry}
+                                key={`${entry.areaName}-${entryIndex}-${staffEntry.id}`}
+                                entry={staffEntry}
                                 t={t}
                               />
                             ))
                           )}
                         </View>
+                        {entry.fieldJobs.length > 0 ? (
+                          <View style={styles.storeNestedFieldJobs}>
+                            {entry.fieldJobs.map((job) => (
+                              <StoreFieldJobCard key={job.id} job={job} nested />
+                            ))}
+                          </View>
+                        ) : null}
                       </View>
-                    ))}
-                  </View>
-                ))}
+                    </View>
+                  );
+                })}
               </View>
             </View>
           )
@@ -757,7 +829,13 @@ export default function ScheduleWeekScreen() {
                     }}
                   />
                   {(selectedFieldGroups.byShiftId[s.id] ?? []).map((job) => (
-                    <FieldJobRow key={job.id || `${s.id}-field-${job.start}`} job={job} nested />
+                    <FieldJobRow
+                      key={job.id || `${s.id}-field-${job.start}`}
+                      job={job}
+                      nested
+                      workDateIso={selected}
+                      attendanceRequests={myAttendanceRequests}
+                    />
                   ))}
                 </View>
               );
@@ -765,7 +843,12 @@ export default function ScheduleWeekScreen() {
             {selectedFieldGroups.standalone.length > 0 ? (
               <View style={styles.fieldJobsSection}>
                 {selectedFieldGroups.standalone.map((job) => (
-                  <FieldJobRow key={job.id || `standalone-${job.start}`} job={job} />
+                  <FieldJobRow
+                    key={job.id || `standalone-${job.start}`}
+                    job={job}
+                    workDateIso={selected}
+                    attendanceRequests={myAttendanceRequests}
+                  />
                 ))}
               </View>
             ) : null}
@@ -973,6 +1056,8 @@ const styles = StyleSheet.create({
   fieldJobsSection: { gap: 10, marginTop: 4 },
   fieldJobsSectionTitle: { fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 4 },
   storeDayView: { gap: 14 },
+  storeTimelineCardGap: { marginTop: 0 },
+  storeNestedFieldJobs: { gap: 8, marginTop: 4 },
   storeRegionCard: {
     borderRadius: 16,
     padding: 14,

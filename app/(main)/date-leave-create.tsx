@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { normalizeSubmitReason } from '../../src/api/mapAttendanceRequest';
+import { previewLeaveFieldImpacts } from '../../src/api/attendance';
 import { CalendarDatePickerModal } from '../../src/components/CalendarDatePickerModal';
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
@@ -25,13 +26,16 @@ import { calendarDateKey } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
 import { addDaysLocal, compareDateKeys, parseDateKey } from '../../src/utils/localDateTime';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
+import { supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import { confirmRequiredFieldImpacts } from '../../src/utils/leaveFieldImpact';
 
 const MAX_DAYS = 90;
 
 export default function DateLeaveCreateScreen() {
   const { t, i18n } = useTranslation();
   const insets = useSafeAreaInsets();
-  const { submitAttendanceRequest } = useAuth();
+  const { submitAttendanceRequest, session } = useAuth();
+  const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const today = calendarDateKey(getApproximateServerNowDate());
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(today);
@@ -98,12 +102,37 @@ export default function DateLeaveCreateScreen() {
       return;
     }
     setSubmitBusy(true);
+    let acknowledgedFieldJobIds: number[] | undefined;
+    if (supportsLeaveFieldV2() && selectedStoreId) {
+      try {
+        const preview = await previewLeaveFieldImpacts(selectedStoreId, {
+          leaveDateFrom: startDate,
+          leaveDateTo: endDate,
+        });
+        const ack = await confirmRequiredFieldImpacts(
+          preview.fieldImpacts ?? [],
+          t,
+          i18n.language,
+        );
+        if (ack === null) {
+          setSubmitBusy(false);
+          return;
+        }
+        if (ack.length > 0) acknowledgedFieldJobIds = ack;
+      } catch (e) {
+        setSubmitBusy(false);
+        const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+        Alert.alert(t('dateLeaveTitle'), message);
+        return;
+      }
+    }
     const res = await submitAttendanceRequest({
       type: 'leave',
       mode: 'date_range',
       reason: reasonText,
       leaveDateFrom: startDate,
       leaveDateTo: endDate,
+      acknowledgedFieldJobIds,
     });
     setSubmitBusy(false);
     if (!res.ok) {

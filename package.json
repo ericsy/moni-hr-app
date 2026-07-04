@@ -1,6 +1,6 @@
 {
   "name": "moni-hr",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "main": "expo-router/entry",
   "scripts": {
     "start": "APP_ENV=dev expo start",
