@@ -1,0 +1,5 @@
+{
+  "ios": {
+    "NSLocationWhenInUseUsageDescription": "Moni HR 需要获取您的位置，用于在电子围栏内完成上下班打卡。"
+  }
+}

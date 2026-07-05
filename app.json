@@ -17,12 +17,17 @@
       "bundleIdentifier": "com.monihr",
       "supportsTablet": true,
       "infoPlist": {
+        "CFBundleAllowMixedLocalizations": true,
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
         "ITSAppUsesNonExemptEncryption": false,
         "LSApplicationQueriesSchemes": ["tel", "telprompt"]
       }
+    },
+    "locales": {
+      "en": "./locales/en.json",
+      "zh": "./locales/zh.json"
     },
     "android": {
       "package": "com.moni.hr",
@@ -58,11 +63,19 @@
       ],
       "./plugins/withAndroidHttp.js",
       "expo-router",
-      "expo-localization",
+      [
+        "expo-localization",
+        {
+          "supportedLocales": {
+            "ios": ["en", "zh"],
+            "android": ["en", "zh"]
+          }
+        }
+      ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Moni HR 需要获取您的位置，用于在电子围栏内完成上下班打卡。"
+          "locationWhenInUsePermission": "Moni HR needs your location to clock in or out within the store geofence."
         }
       ],
       "expo-font"

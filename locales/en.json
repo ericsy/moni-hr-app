@@ -1,0 +1,5 @@
+{
+  "ios": {
+    "NSLocationWhenInUseUsageDescription": "Moni HR needs your location to clock in or out within the store geofence."
+  }
+}

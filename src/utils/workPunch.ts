@@ -1,5 +1,7 @@
 import * as Location from 'expo-location';
 
+import { ensureLocationPermissionForPunch } from './locationPermission';
+
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import { postWorkPunch } from '../api/todayWork';
 import type { LeaveRequest } from '../context/AuthContext';
@@ -218,8 +220,8 @@ export async function executeWorkPunch(params: {
     throw new Error('WORK_PUNCH_INVALID_ACTION');
   }
 
-  const perm = await Location.requestForegroundPermissionsAsync();
-  if (perm.status !== 'granted') {
+  const perm = await ensureLocationPermissionForPunch();
+  if (!perm.granted) {
     throw new Error('LOCATION_PERMISSION_DENIED');
   }
 

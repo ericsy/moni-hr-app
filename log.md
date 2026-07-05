@@ -2,6 +2,7 @@
 
 ## 2026-07-05
 
+- **打卡定位授权文案双语**：系统授权框通过 `locales/en.json`、`locales/zh.json` 配置 iOS `NSLocationWhenInUseUsageDescription`（随设备系统语言）；不再在系统弹窗前额外弹 App 说明框；`ensureLocationPermissionForPunch` 统一排班/外勤打卡入口。
 - **修改密码 401「未授权或 Token 无效」**：`send_task` 后端 `AppBearerTokenFilter` 须在请求头 `X-Store-Id` 或服务端 `app_last_store_id` 能解析出门店后才建立 `AppAuthPrincipal`；修改密码接口原先未带 `X-Store-Id`，登录后若未手动切店则服务端无 lastStore，导致 Token 有效仍 401。`changeEmployeePassword` / `AuthContext.changePassword` 现携带当前 `selectedStoreId`。
 
 ## 2026-07-04

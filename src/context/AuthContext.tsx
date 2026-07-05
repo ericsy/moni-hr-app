@@ -58,6 +58,7 @@ import { getPunchDevicePayload } from '../utils/punchDevice';
 import { punchRecordMatchesTarget, shiftMatchTargetFromSlot } from '../utils/shiftIdentity';
 import { resetServerClockState, setClockSkewWarningHandler, syncServerTimeFromMillis } from '../utils/serverClock';
 import * as Location from 'expo-location';
+import { ensureLocationPermissionForPunch } from '../utils/locationPermission';
 
 const AUTH_KEY = 'moni-hr-session-v1';
 const TOKEN_KEY = 'moni-hr-access-token';
@@ -781,9 +782,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, message: i18n.t('punchErrorInvalidCell') };
       }
 
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') {
-        return { ok: false, message: i18n.t('clockPermissionDenied') };
+      const perm = await ensureLocationPermissionForPunch();
+      if (!perm.granted) {
+        return { ok: false, message: perm.message };
       }
 
       try {
