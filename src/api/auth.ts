@@ -84,10 +84,14 @@ export function updateLastStore(storeId: number) {
   });
 }
 
-/** 员工修改登录密码 PUT /api/v1/app/auth/password（Bearer + X-Lang） */
-export function changeEmployeePassword(body: AppChangePasswordRequest) {
+/** 员工修改登录密码 PUT /api/v1/app/auth/password（Bearer + X-Lang + X-Store-Id） */
+export function changeEmployeePassword(
+  body: AppChangePasswordRequest,
+  storeId?: string | number,
+) {
   return apiRequest<null>('/api/v1/app/auth/password', {
     method: 'PUT',
     body,
+    storeId,
   });
 }

@@ -1,5 +1,9 @@
 # moni-hr-app 变更日志
 
+## 2026-07-05
+
+- **修改密码 401「未授权或 Token 无效」**：`send_task` 后端 `AppBearerTokenFilter` 须在请求头 `X-Store-Id` 或服务端 `app_last_store_id` 能解析出门店后才建立 `AppAuthPrincipal`；修改密码接口原先未带 `X-Store-Id`，登录后若未手动切店则服务端无 lastStore，导致 Token 有效仍 401。`changeEmployeePassword` / `AuthContext.changePassword` 现携带当前 `selectedStoreId`。
+
 ## 2026-07-04
 
 - **外勤改派留底**：请假/日常改派不删分配行，标记 `released_*`；须执行后端迁移 `migrate-merchant_service_job_assignment-release.sql`。

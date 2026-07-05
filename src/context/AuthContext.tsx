@@ -620,21 +620,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(LANG_KEY, lng);
   }, []);
 
-  const changePassword = useCallback(async (oldPassword: string, newPassword: string) => {
-    if (!oldPassword?.trim() || !newPassword?.trim()) {
-      return { ok: false, error: 'empty' };
-    }
-    try {
-      await changeEmployeePassword({
-        currentPassword: oldPassword.trim(),
-        newPassword: newPassword.trim(),
-      });
-      return { ok: true };
-    } catch (e) {
-      const message = e instanceof ApiError ? e.message : undefined;
-      return { ok: false, error: 'api', message };
-    }
-  }, []);
+  const changePassword = useCallback(
+    async (oldPassword: string, newPassword: string) => {
+      if (!oldPassword?.trim() || !newPassword?.trim()) {
+        return { ok: false, error: 'empty' };
+      }
+      const storeId =
+        session?.user.selectedStoreId ?? session?.user.stores[0]?.id;
+      if (!storeId) {
+        return { ok: false, error: 'api', message: i18n.t('passwordChangeFailed') };
+      }
+      try {
+        await changeEmployeePassword(
+          {
+            currentPassword: oldPassword.trim(),
+            newPassword: newPassword.trim(),
+          },
+          storeId,
+        );
+        return { ok: true };
+      } catch (e) {
+        const message = e instanceof ApiError ? e.message : undefined;
+        return { ok: false, error: 'api', message };
+      }
+    },
+    [session?.user.selectedStoreId, session?.user.stores],
+  );
 
   const updateProfile = useCallback((patch: Partial<Pick<User, 'email' | 'phone'>>) => {
     setSession((prev) => {
