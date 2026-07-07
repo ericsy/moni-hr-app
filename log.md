@@ -1,5 +1,9 @@
 # moni-hr-app 变更日志
 
+## 2026-07-06
+
+- **外勤服务类型改为手动输入（商家端）**：`moni-hr-merchant` 外勤表单服务类型由下拉改为自由文本；员工 App 无需改动（`formatFieldServiceType` 对未知值原样展示）。
+
 ## 2026-07-05
 
 - **打卡定位授权文案双语**：系统授权框通过 `locales/en.json`、`locales/zh.json` 配置 iOS `NSLocationWhenInUseUsageDescription`（随设备系统语言）；不再在系统弹窗前额外弹 App 说明框；`ensureLocationPermissionForPunch` 统一排班/外勤打卡入口。
@@ -609,3 +613,8 @@
 - **外勤预览误按整段请假计算**：界面在不可整段请假时默认展示「部分时段」，但预览 API 仍可能按 `leaveScope=full` 发送，导致外勤 `14:05–15:05` 在请假 `13:50–14:00` 时被误判为完全重叠。新增 **`leaveScopeResolve.ts`** 统一有效请假范围；预览/提交共用 **`buildLeaveTimesByScheduleKey`**；无重叠外勤不再展示（**`visibleFieldImpacts`**）；后端预览过滤 `overlapType=none`。
 - **修复 `isFullLeaveBlocked` 未定义**：`useCallback` 定义晚于 `useMemo`/`useEffect` 引用，运行时报 `is not a function`；已上移至 `focusedSlots` 之后。
 - **外勤影响英文徽章换行**：`leaveFieldImpactRequired` 改为 `Requires approval`；徽章去掉 `maxWidth: 46%` 并设 `flexShrink: 0`，避免在 “at” 处断行。
+
+## 2026-07-07
+
+- **Hero 打卡优先级（店班已上 + 外勤可上班）**：`SchedulePunchHeroCard.tsx` 将外勤/店班**上班** work 动作（指纹可点）提前到店班「已打卡 ✓」等待态之前；顺序为：下班 > 外勤服务中 > **外勤上班** > 店班已打卡。修复店班 10:00 已打上班后，11:00 外勤进入打卡窗口仍被「已打卡」挡住无法打外勤上班的问题。
+- **外勤英文文案 Field → Assign**：`i18n/resources.ts` 英文 locale 中外勤相关用户可见文案（如 Field service / Field job）统一改为 Assign service / Assign job 等产品用语；表单 password fields 等无关文案未改。

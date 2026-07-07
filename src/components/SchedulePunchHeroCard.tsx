@@ -308,7 +308,7 @@ export function SchedulePunchHeroCard({
     ? resolveHeroDisplayMode(slotActions, clockInIso, clockOutIso)
     : 'idle';
 
-  // 2b. 外勤服务中（已打上班、未到计划结束）：优先于 DONE / 通用等待
+  // 2b. 外勤服务中（已打上班、未到计划结束）
   if (activeFieldJob && shouldShowFieldHeroInService(activeFieldJob, now)) {
     return (
       <View style={styles.card}>
@@ -329,40 +329,7 @@ export function SchedulePunchHeroCard({
     );
   }
 
-  // 2c. 店班已上班、尚未到下班窗口（优先于通用 WAITING）
-  if (slot && slotActions && storeHeroMode === 'clocked_in') {
-    return (
-      <StoreShiftHeroBody
-        actions={slotActions}
-        clockInIso={clockInIso}
-        clockOutIso={clockOutIso}
-        i18n={i18n}
-        now={now}
-        onPunch={onPunch}
-        punchBusy={punchBusy}
-        slot={slot}
-        t={t}
-      />
-    );
-  }
-
-  if (shouldPreferStoreShiftHero && slot && slotActions) {
-    return (
-      <StoreShiftHeroBody
-        actions={slotActions}
-        clockInIso={clockInIso}
-        clockOutIso={clockOutIso}
-        i18n={i18n}
-        now={now}
-        onPunch={onPunch}
-        punchBusy={punchBusy}
-        slot={slot}
-        t={t}
-      />
-    );
-  }
-
-  // 3. 外勤/店班上班类 work 动作（仅当无下班卡可打时）
+  // 3. 外勤/店班上班类 work 动作（优先于店班「已打卡」等待态，便于店班已上后打外勤上班）
   if (workReady && workAction && isClockInWorkAction(workAction.action)) {
     const title = formatWorkPunchTitle(workAction, t);
     const isField = isFieldWorkPunchAction(workAction.action);
@@ -401,6 +368,39 @@ export function SchedulePunchHeroCard({
           <Text style={styles.punchBtnText}>{t('punchHeroNow')}</Text>
         </Pressable>
       </View>
+    );
+  }
+
+  // 4. 店班已上班、尚未到下班窗口（无更优先的可打卡动作时）
+  if (slot && slotActions && storeHeroMode === 'clocked_in') {
+    return (
+      <StoreShiftHeroBody
+        actions={slotActions}
+        clockInIso={clockInIso}
+        clockOutIso={clockOutIso}
+        i18n={i18n}
+        now={now}
+        onPunch={onPunch}
+        punchBusy={punchBusy}
+        slot={slot}
+        t={t}
+      />
+    );
+  }
+
+  if (shouldPreferStoreShiftHero && slot && slotActions) {
+    return (
+      <StoreShiftHeroBody
+        actions={slotActions}
+        clockInIso={clockInIso}
+        clockOutIso={clockOutIso}
+        i18n={i18n}
+        now={now}
+        onPunch={onPunch}
+        punchBusy={punchBusy}
+        slot={slot}
+        t={t}
+      />
     );
   }
 
