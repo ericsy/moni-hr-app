@@ -1,5 +1,23 @@
 # moni-hr-app 变更日志
 
+## 2026-07-14
+
+- **Duty 跟随外勤处置**：店班请假含外勤 / 外勤请假时，与外勤同店班格子的 Required Duty 审批不再单独选执行人；UI 显示「跟随外勤」；外勤取消→跳过 Duty、改派→同人；`leaveDutyImpact.ts` 增加父子匹配与继承；校验/提交按继承填写；仅仍有需手动处置的 Duty 时才拦截低版本 App。
+
+- **请假 Duty 影响 UI**：对齐外勤联动模式。
+  - **i18n**：`leaveDutyImpact*` / `leaveDutyDisposition*` / `dutyTrigger*` 等中英文案。
+  - **`request-create`**：班次请假 debounce 并行预览 Duty；提交班次/外勤请假时在外勤确认后弹 Duty 确认，携带 `acknowledgedDutyImpactKeys`；列表展示 `DutyImpactPreviewList`（`supportsLeaveDutyLinkage` ≥1.3.0）。
+  - **`date-leave-create`**：按日期请假提交前预览并确认 Duty，携带 `acknowledgedDutyImpactKeys`。
+  - **`request-detail`**：展示 Duty 影响；审批通过须对 required 选择 skip/reassign（改派可选人）；替班人选中后可默认同 leaveItem 的 Duty 改派；低版本提示 `leaveDutyReviewUpgrade`；`reviewAttendanceRequest` 传 `dutyDispositions`。
+
+- **Duty 预生成**：后端改为排班发布/定时物化实例后再推送，员工未打开 App 也能收远程通知（本仓无代码变更）。
+- **DutyPushRecovery 多实例**：补漏调度加 Redis 分布式锁，避免负载均衡多节点重复扫库入队。
+- （跨仓说明）后端 Duty 远程推送已改为 RabbitMQ 延迟投递，App 本地预约逻辑不变。
+
+- **Duty 本地 + 远程推送**：接入 `expo-notifications`（channel `duties`）；登录/冷启动注册 Expo Push Token（`POST /api/v1/app/push/register`），登出注销；按 `todayDuties` 预约本地通知（identifier=`duty-{instanceId}` 与远端去重）；点击通知跳转排班页；弹层/文案中英 i18n（`dutyModal*` / `dutyNotify*`）。
+
+- **Duties 弹层**：`today-work-summary` 解析 `currentDutyAction` / `pendingDuties` / `canPunch`；排班页自动弹出 `DutyGateModal`，完成任务后刷新摘要；`canPunch=false` 时拦截 Hero 打卡并提示先完成必做。
+
 ## 2026-07-11
 
 - **未同步外勤不挡店班下班**：`fieldBlocksHeroStoreClockOut` 仅在外勤开启「同步店班下班」且服务中时挡住店班离店；未同步时可正常打店班下班卡。

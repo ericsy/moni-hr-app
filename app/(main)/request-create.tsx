@@ -24,8 +24,9 @@ import {
   type MyPublishedShiftSlot,
 } from '../../src/api/mapPublishedSchedule';
 import { normalizeSubmitReason, buildLeaveItemsPayload } from '../../src/api/mapAttendanceRequest';
-import { previewLeaveFieldImpacts } from '../../src/api/attendance';
-import type { AppAttendanceFieldImpact } from '../../src/api/types';
+import { previewLeaveDutyImpacts, previewLeaveFieldImpacts } from '../../src/api/attendance';
+import type { AppAttendanceDutyImpact, AppAttendanceFieldImpact } from '../../src/api/types';
+import { DutyImpactPreviewList } from '../../src/components/DutyImpactPreviewList';
 import { FieldImpactPreviewList } from '../../src/components/FieldImpactPreviewList';
 import { fetchMyPublishedSchedule } from '../../src/api/schedule';
 import { TimeSelectField } from '../../src/components/TimeSelectField';
@@ -35,8 +36,17 @@ import { colors } from '../../src/theme/colors';
 import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForeground';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
-import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import {
+  supportsLeaveDutyLinkage,
+  supportsLeaveFieldV1,
+  supportsLeaveFieldV2,
+} from '../../src/utils/clientCapability';
 import { findLeaveCoveringFieldJob } from '../../src/utils/fieldLeaveEligibility';
+import {
+  confirmRequiredDutyImpacts,
+  sameDutyImpactPreview,
+  visibleDutyImpacts,
+} from '../../src/utils/leaveDutyImpact';
 import { confirmRequiredFieldImpacts, sameFieldImpactPreview, visibleFieldImpacts } from '../../src/utils/leaveFieldImpact';
 import {
   buildLeaveTimesByScheduleKey,
@@ -175,11 +185,18 @@ export default function RequestCreateScreen() {
   const [fieldImpactPreview, setFieldImpactPreview] = useState<AppAttendanceFieldImpact[]>([]);
   const fieldImpactPreviewRef = useRef<AppAttendanceFieldImpact[]>([]);
   const fieldImpactReqSeqRef = useRef(0);
+  const [dutyImpactPreview, setDutyImpactPreview] = useState<AppAttendanceDutyImpact[]>([]);
+  const dutyImpactPreviewRef = useRef<AppAttendanceDutyImpact[]>([]);
+  const dutyImpactReqSeqRef = useRef(0);
   const closingAfterSubmitRef = useRef(false);
 
   useEffect(() => {
     fieldImpactPreviewRef.current = fieldImpactPreview;
   }, [fieldImpactPreview]);
+
+  useEffect(() => {
+    dutyImpactPreviewRef.current = dutyImpactPreview;
+  }, [dutyImpactPreview]);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const isFieldFromRoute = sanitizeRouteParam(params.source) === 'field';
@@ -541,19 +558,26 @@ export default function RequestCreateScreen() {
   ]);
 
   useEffect(() => {
-    if (type !== 'leave' || isFieldLeave || !supportsLeaveFieldV1() || !selectedStoreId) {
+    const canField = supportsLeaveFieldV1();
+    const canDuty = supportsLeaveDutyLinkage();
+    if (type !== 'leave' || isFieldLeave || !selectedStoreId || (!canField && !canDuty)) {
       fieldImpactReqSeqRef.current += 1;
+      dutyImpactReqSeqRef.current += 1;
       setFieldImpactPreview([]);
+      setDutyImpactPreview([]);
       return;
     }
     const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
     if (shifts.length === 0) {
       fieldImpactReqSeqRef.current += 1;
+      dutyImpactReqSeqRef.current += 1;
       setFieldImpactPreview([]);
+      setDutyImpactPreview([]);
       return;
     }
     let cancelled = false;
-    const seq = ++fieldImpactReqSeqRef.current;
+    const fieldSeq = ++fieldImpactReqSeqRef.current;
+    const dutySeq = ++dutyImpactReqSeqRef.current;
     const timer = setTimeout(() => {
       void (async () => {
         try {
@@ -566,15 +590,47 @@ export default function RequestCreateScreen() {
             isFullLeaveBlockedRef.current,
           );
           const leaveItems = buildLeaveItemsPayload(shifts, { leaveTimesByScheduleKey });
-          const preview = await previewLeaveFieldImpacts(selectedStoreId, { leaveItems });
-          if (cancelled || seq !== fieldImpactReqSeqRef.current) return;
-          const next = visibleFieldImpacts(preview.fieldImpacts);
-          if (!sameFieldImpactPreview(fieldImpactPreviewRef.current, next)) {
-            setFieldImpactPreview(next);
+          const tasks: Promise<void>[] = [];
+          if (canField) {
+            tasks.push(
+              (async () => {
+                try {
+                  const preview = await previewLeaveFieldImpacts(selectedStoreId, { leaveItems });
+                  if (cancelled || fieldSeq !== fieldImpactReqSeqRef.current) return;
+                  const next = visibleFieldImpacts(preview.fieldImpacts);
+                  if (!sameFieldImpactPreview(fieldImpactPreviewRef.current, next)) {
+                    setFieldImpactPreview(next);
+                  }
+                } catch {
+                  if (cancelled || fieldSeq !== fieldImpactReqSeqRef.current) return;
+                  // 失败时：已有列表保留；没有则保持不渲染
+                }
+              })(),
+            );
+          } else {
+            setFieldImpactPreview([]);
           }
+          if (canDuty) {
+            tasks.push(
+              (async () => {
+                try {
+                  const preview = await previewLeaveDutyImpacts(selectedStoreId, { leaveItems });
+                  if (cancelled || dutySeq !== dutyImpactReqSeqRef.current) return;
+                  const next = visibleDutyImpacts(preview.dutyImpacts);
+                  if (!sameDutyImpactPreview(dutyImpactPreviewRef.current, next)) {
+                    setDutyImpactPreview(next);
+                  }
+                } catch {
+                  if (cancelled || dutySeq !== dutyImpactReqSeqRef.current) return;
+                }
+              })(),
+            );
+          } else {
+            setDutyImpactPreview([]);
+          }
+          await Promise.all(tasks);
         } catch {
-          if (cancelled || seq !== fieldImpactReqSeqRef.current) return;
-          // 失败时：已有列表保留；没有则保持不渲染
+          // 外层不应失败；各预览已自行兜底
         }
       })();
     }, 450);
@@ -991,6 +1047,7 @@ export default function RequestCreateScreen() {
         }
         setSubmitBusy(true);
         let acknowledgedFieldJobIds: number[] | undefined;
+        let acknowledgedDutyImpactKeys: string[] | undefined;
         if (supportsLeaveFieldV2() && selectedStoreId) {
           try {
             const jobId = Number(fieldJobFromRoute.id);
@@ -1013,6 +1070,27 @@ export default function RequestCreateScreen() {
             return;
           }
         }
+        if (supportsLeaveDutyLinkage() && selectedStoreId) {
+          try {
+            const jobId = Number(fieldJobFromRoute.id);
+            if (!Number.isFinite(jobId) || jobId <= 0) throw new Error(t('requestSubmitFailed'));
+            const preview = await previewLeaveDutyImpacts(selectedStoreId, { fieldJobId: jobId });
+            const ack = await confirmRequiredDutyImpacts(
+              visibleDutyImpacts(preview.dutyImpacts),
+              t,
+            );
+            if (ack === null) {
+              setSubmitBusy(false);
+              return;
+            }
+            if (ack.length > 0) acknowledgedDutyImpactKeys = ack;
+          } catch (e) {
+            setSubmitBusy(false);
+            const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+            Alert.alert(t('typeFieldLeave'), message);
+            return;
+          }
+        }
         const res = await submitAttendanceRequest({
           type: 'leave',
           source: 'field',
@@ -1020,6 +1098,7 @@ export default function RequestCreateScreen() {
           fieldJobId: fieldJobFromRoute.id,
           workDate: fieldJobWorkDate(fieldJobFromRoute),
           acknowledgedFieldJobIds,
+          acknowledgedDutyImpactKeys,
         });
         if (!res.ok) {
           setSubmitBusy(false);
@@ -1075,6 +1154,7 @@ export default function RequestCreateScreen() {
       );
       setSubmitBusy(true);
       let acknowledgedFieldJobIds: number[] | undefined;
+      let acknowledgedDutyImpactKeys: string[] | undefined;
       if (supportsLeaveFieldV1() && selectedStoreId) {
         try {
           const leaveItems = buildLeaveItemsPayload(shifts, {
@@ -1102,6 +1182,32 @@ export default function RequestCreateScreen() {
           return;
         }
       }
+      if (supportsLeaveDutyLinkage() && selectedStoreId) {
+        try {
+          const leaveItems = buildLeaveItemsPayload(shifts, {
+            leaveTimesByScheduleKey,
+            leaveTime:
+              shifts.length === 1
+                ? leaveTimesByScheduleKey[shiftSelectionKeyFromBinding(shifts[0])]
+                : undefined,
+          });
+          const preview = await previewLeaveDutyImpacts(selectedStoreId, { leaveItems });
+          const ack = await confirmRequiredDutyImpacts(
+            visibleDutyImpacts(preview.dutyImpacts),
+            t,
+          );
+          if (ack === null) {
+            setSubmitBusy(false);
+            return;
+          }
+          if (ack.length > 0) acknowledgedDutyImpactKeys = ack;
+        } catch (e) {
+          setSubmitBusy(false);
+          const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+          Alert.alert(t('typeLeave'), message);
+          return;
+        }
+      }
       const res = await submitAttendanceRequest({
         type: 'leave',
         reason: reasonText,
@@ -1112,6 +1218,7 @@ export default function RequestCreateScreen() {
             ? leaveTimesByScheduleKey[shiftSelectionKeyFromBinding(shifts[0])]
             : undefined,
         acknowledgedFieldJobIds,
+        acknowledgedDutyImpactKeys,
       });
       if (!res.ok) {
         setSubmitBusy(false);
@@ -1810,6 +1917,13 @@ export default function RequestCreateScreen() {
           <View style={styles.fieldImpactPanel}>
             <Text style={styles.fieldImpactTitle}>{t('leaveFieldImpactSection')}</Text>
             <FieldImpactPreviewList impacts={fieldImpactPreview} />
+          </View>
+        ) : null}
+
+        {supportsLeaveDutyLinkage() && dutyImpactPreview.length > 0 ? (
+          <View style={styles.fieldImpactPanel}>
+            <Text style={styles.fieldImpactTitle}>{t('leaveDutyImpactSection')}</Text>
+            <DutyImpactPreviewList impacts={dutyImpactPreview} />
           </View>
         ) : null}
       </View>

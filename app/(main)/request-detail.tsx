@@ -25,8 +25,10 @@ import {
   type AttendanceRequestDetail,
 } from '../../src/api/mapAttendanceRequest';
 import type {
+  AppAttendanceDutyImpact,
   AppAttendanceFieldImpact,
   AppAttendanceLeaveItem,
+  DutyLeaveDispositionRequest,
   FieldLeaveDispositionRequest,
   LeaveSubstitutionReviewItem,
 } from '../../src/api/types';
@@ -36,8 +38,13 @@ import { useRefreshOnAppForeground } from '../../src/hooks/useRefreshOnAppForegr
 import { canReviewAttendanceRequest, isRequestApplicant } from '../../src/utils/requestApproval';
 import { colors } from '../../src/theme/colors';
 import { formatPunchHeaderDate, formatRequestDateTime } from '../../src/utils/formatPunchTime';
-import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import {
+  supportsLeaveDutyLinkage,
+  supportsLeaveFieldV1,
+  supportsLeaveFieldV2,
+} from '../../src/utils/clientCapability';
 import { buildFieldImpactDisplay, parseFieldImpactScheduleWindow } from '../../src/utils/formatFieldImpact';
+import { dutyImpactKey, findParentFieldImpactForDuty, inheritDutyFromFieldAction, requiredDutyImpacts } from '../../src/utils/leaveDutyImpact';
 import { formatShiftBindingLine } from '../../src/utils/requestShiftBinding';
 
 function scheduleDateKey(value?: string | null): string {
@@ -67,6 +74,20 @@ function leaveEffectLabel(effect: string | undefined, t: (k: string) => string) 
   if (e === 'late_in') return t('requestLeaveEffectLateIn');
   if (e === 'early_out') return t('requestLeaveEffectEarlyOut');
   return t('leaveTimeFull');
+}
+
+function dutyTriggerLabel(trigger: string | undefined, t: (k: string) => string) {
+  if (trigger === 'clock_in') return t('dutyTriggerClockIn');
+  if (trigger === 'clock_out') return t('dutyTriggerClockOut');
+  if (trigger === 'recurring') return t('dutyTriggerRecurring');
+  return trigger ?? '';
+}
+
+function hmFromDutyWindow(value?: string | null): string | undefined {
+  const s = (value ?? '').trim();
+  if (!s) return undefined;
+  const m = s.match(/(\d{2}):(\d{2})/);
+  return m ? `${m[1]}:${m[2]}` : undefined;
 }
 
 function formatShiftRangeFromItem(item: AppAttendanceLeaveItem): string {
@@ -135,6 +156,15 @@ export default function RequestDetailScreen() {
   const [fieldAssigneePickerOpenFor, setFieldAssigneePickerOpenFor] = useState<string | null>(
     null,
   );
+  const [dutyActionByKey, setDutyActionByKey] = useState<Record<string, 'skip' | 'reassign' | ''>>(
+    {},
+  );
+  const [dutyAssigneeByKey, setDutyAssigneeByKey] = useState<Record<string, string>>({});
+  const [dutyCandidatesByKey, setDutyCandidatesByKey] = useState<
+    Record<string, SubstituteCandidate[]>
+  >({});
+  const [dutyCandidatesLoading, setDutyCandidatesLoading] = useState<Record<string, boolean>>({});
+  const [dutyPickerOpenFor, setDutyPickerOpenFor] = useState<string | null>(null);
 
   const requestId = params.id ?? '';
   const storeId = session?.user?.selectedStoreId ?? '';
@@ -147,11 +177,39 @@ export default function RequestDetailScreen() {
     () => resolveEffectiveRequiredFieldImpacts(detail),
     [detail],
   );
+  const effectiveRequiredDutyImpacts = useMemo(
+    () => requiredDutyImpacts(detail?.dutyImpacts),
+    [detail],
+  );
+  /** Duty impactKey → 同源外勤影响（审批时跟随外勤处置，不再单独选人） */
+  const dutyParentFieldByKey = useMemo(() => {
+    const map: Record<string, AppAttendanceFieldImpact> = {};
+    if (!detail || detail.status !== 'pending' || detail.type !== 'leave') return map;
+    const fields = detail.fieldImpacts ?? [];
+    if (fields.length === 0) return map;
+    for (const duty of requiredDutyImpacts(detail.dutyImpacts)) {
+      const parent = findParentFieldImpactForDuty(duty, fields);
+      if (parent && parent.requiredAction === 'required') {
+        map[dutyImpactKey(duty)] = parent;
+      }
+    }
+    return map;
+  }, [detail]);
   const showFieldDispositionEditor =
     showApprovalActions &&
     detail?.status === 'pending' &&
     detail?.type === 'leave' &&
     effectiveRequiredFieldImpacts.length > 0;
+  const showDutyDispositionEditor =
+    showApprovalActions &&
+    detail?.status === 'pending' &&
+    detail?.type === 'leave' &&
+    effectiveRequiredDutyImpacts.length > 0;
+  const manualRequiredDutyCount = useMemo(
+    () =>
+      effectiveRequiredDutyImpacts.filter((d) => !dutyParentFieldByKey[dutyImpactKey(d)]).length,
+    [effectiveRequiredDutyImpacts, dutyParentFieldByKey],
+  );
   const fieldLinkageSupported = useMemo(() => {
     if (detail?.leaveMode === 'field_job' || detail?.leaveMode === 'date_range') {
       return supportsLeaveFieldV2();
@@ -160,6 +218,12 @@ export default function RequestDetailScreen() {
   }, [detail?.leaveMode]);
   const approveBlockedByFieldLinkage =
     showFieldDispositionEditor && !fieldLinkageSupported;
+  const approveBlockedByDutyLinkage =
+    showDutyDispositionEditor &&
+    manualRequiredDutyCount > 0 &&
+    !supportsLeaveDutyLinkage();
+  const approveBlockedByLinkage =
+    approveBlockedByFieldLinkage || approveBlockedByDutyLinkage;
 
   const loadDetail = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -204,6 +268,22 @@ export default function RequestDetailScreen() {
           setFieldActionByJobId({});
           setFieldAssigneeByJobId({});
         }
+        const requiredDuties = requiredDutyImpacts(mapped.dutyImpacts);
+        if (requiredDuties.length > 0) {
+          const actions: Record<string, 'skip' | 'reassign' | ''> = {};
+          const assignees: Record<string, string> = {};
+          for (const row of requiredDuties) {
+            const key = dutyImpactKey(row);
+            actions[key] = '';
+            assignees[key] = '';
+          }
+          setDutyActionByKey(actions);
+          setDutyAssigneeByKey(assignees);
+        } else {
+          setDutyActionByKey({});
+          setDutyAssigneeByKey({});
+        }
+        setDutyPickerOpenFor(null);
       } catch (e) {
         const message = e instanceof ApiError ? e.message : t('requestDetailLoadFailed');
         setError(message);
@@ -261,6 +341,27 @@ export default function RequestDetailScreen() {
     [storeId, detail?.applicantId, i18n.language],
   );
 
+  const loadDutyAssigneeCandidates = useCallback(
+    async (impactKey: string, impact: AppAttendanceDutyImpact) => {
+      if (!storeId || !impactKey) return;
+      setDutyCandidatesLoading((prev) => ({ ...prev, [impactKey]: true }));
+      try {
+        const items = await fetchSubstituteCandidates(storeId, {
+          scheduleDate: impact.workDate,
+          startTime: hmFromDutyWindow(impact.windowStart),
+          endTime: hmFromDutyWindow(impact.windowEnd),
+          excludeMerchantAdminId: detail?.applicantId,
+        });
+        setDutyCandidatesByKey((prev) => ({ ...prev, [impactKey]: items }));
+      } catch {
+        setDutyCandidatesByKey((prev) => ({ ...prev, [impactKey]: [] }));
+      } finally {
+        setDutyCandidatesLoading((prev) => ({ ...prev, [impactKey]: false }));
+      }
+    },
+    [storeId, detail?.applicantId],
+  );
+
   const buildFieldDispositions = (): FieldLeaveDispositionRequest[] | undefined => {
     if (!showFieldDispositionEditor) return undefined;
     const rows: FieldLeaveDispositionRequest[] = [];
@@ -300,6 +401,105 @@ export default function RequestDetailScreen() {
     return null;
   };
 
+  const buildDutyDispositions = (): DutyLeaveDispositionRequest[] | undefined => {
+    if (!showDutyDispositionEditor) return undefined;
+    const rows: DutyLeaveDispositionRequest[] = [];
+    for (const impact of effectiveRequiredDutyImpacts) {
+      const key = dutyImpactKey(impact);
+      const parent = dutyParentFieldByKey[key];
+      let action: 'skip' | 'reassign' | '' = dutyActionByKey[key] ?? '';
+      let assigneeRaw = dutyAssigneeByKey[key] ?? '';
+      if (parent) {
+        const inherited = inheritDutyFromFieldAction(
+          fieldActionByJobId[String(parent.fieldJobId)],
+          fieldAssigneeByJobId[String(parent.fieldJobId)],
+        );
+        if (!inherited) continue;
+        action = inherited.action;
+        assigneeRaw = inherited.assigneeMerchantAdminId ?? '';
+      }
+      if (action !== 'skip' && action !== 'reassign') continue;
+      const row: DutyLeaveDispositionRequest = {
+        impactKey: key,
+        templateId: impact.templateId,
+        workDate: impact.workDate,
+        publishedCellId: impact.publishedCellId,
+        action,
+      };
+      if (action === 'reassign') {
+        const assignee = Number(assigneeRaw);
+        if (!Number.isFinite(assignee) || assignee <= 0) continue;
+        row.assigneeMerchantAdminId = assignee;
+      }
+      rows.push(row);
+    }
+    return rows.length > 0 ? rows : undefined;
+  };
+
+  const validateDutyDispositionsForApprove = (): string | null => {
+    if (!showDutyDispositionEditor) return null;
+    if (manualRequiredDutyCount > 0 && !supportsLeaveDutyLinkage()) return null;
+    for (const impact of effectiveRequiredDutyImpacts) {
+      const key = dutyImpactKey(impact);
+      const parent = dutyParentFieldByKey[key];
+      if (parent) {
+        // 外勤处置校验已覆盖；此处仅确认可派生 Duty 处置
+        const inherited = inheritDutyFromFieldAction(
+          fieldActionByJobId[String(parent.fieldJobId)],
+          fieldAssigneeByJobId[String(parent.fieldJobId)],
+        );
+        if (!inherited) {
+          return t('leaveFieldReviewIncomplete');
+        }
+        continue;
+      }
+      if (!supportsLeaveDutyLinkage()) {
+        return t('leaveDutyReviewUpgrade');
+      }
+      const action = dutyActionByKey[key];
+      if (action !== 'skip' && action !== 'reassign') {
+        return t('leaveDutyReviewIncomplete');
+      }
+      if (action === 'reassign') {
+        const assignee = Number(dutyAssigneeByKey[key]);
+        if (!Number.isFinite(assignee) || assignee <= 0) {
+          return t('leaveDutyReviewReassignRequired');
+        }
+      }
+    }
+    return null;
+  };
+
+  const applySubstituteDefaultToDuties = (leaveItemId: string, substituteId: string) => {
+    if (!showDutyDispositionEditor || !substituteId) return;
+    const leaveItemNum = Number(leaveItemId);
+    if (!Number.isFinite(leaveItemNum) || leaveItemNum <= 0) return;
+    setDutyActionByKey((prev) => {
+      const next = { ...prev };
+      for (const impact of effectiveRequiredDutyImpacts) {
+        if (impact.leaveItemId !== leaveItemNum) continue;
+        const key = dutyImpactKey(impact);
+        if (dutyParentFieldByKey[key]) continue;
+        if (!prev[key] || prev[key] === '') {
+          next[key] = 'reassign';
+        }
+      }
+      return next;
+    });
+    setDutyAssigneeByKey((prev) => {
+      const next = { ...prev };
+      for (const impact of effectiveRequiredDutyImpacts) {
+        if (impact.leaveItemId !== leaveItemNum) continue;
+        const key = dutyImpactKey(impact);
+        if (dutyParentFieldByKey[key]) continue;
+        if (!prev[key]) {
+          next[key] = substituteId;
+        }
+      }
+      return next;
+    });
+  };
+
   const buildSubstitutions = (): LeaveSubstitutionReviewItem[] | undefined => {
     if (!detail?.leaveItemsDetail?.length) return undefined;
     const items: LeaveSubstitutionReviewItem[] = [];
@@ -326,9 +526,18 @@ export default function RequestDetailScreen() {
         Alert.alert(t('requestDetailTitle'), t('leaveFieldReviewUpgrade'));
         return;
       }
+      if (approveBlockedByDutyLinkage) {
+        Alert.alert(t('requestDetailTitle'), t('leaveDutyReviewUpgrade'));
+        return;
+      }
       const fieldError = validateFieldDispositionsForApprove();
       if (fieldError) {
         Alert.alert(t('requestDetailTitle'), fieldError);
+        return;
+      }
+      const dutyError = validateDutyDispositionsForApprove();
+      if (dutyError) {
+        Alert.alert(t('requestDetailTitle'), dutyError);
         return;
       }
     }
@@ -342,12 +551,15 @@ export default function RequestDetailScreen() {
         : undefined;
     const fieldDispositions =
       reviewTarget.approved && showFieldDispositionEditor ? buildFieldDispositions() : undefined;
+    const dutyDispositions =
+      reviewTarget.approved && showDutyDispositionEditor ? buildDutyDispositions() : undefined;
     const res = await reviewAttendanceRequest(
       detail.id,
       reviewTarget.approved,
       reviewComment,
       substitutions,
       fieldDispositions,
+      dutyDispositions,
     );
     setReviewBusy(false);
     if (!res.ok) {
@@ -589,6 +801,10 @@ export default function RequestDetailScreen() {
                                               ...prev,
                                               [key]: String(candidate.id),
                                             }));
+                                            applySubstituteDefaultToDuties(
+                                              key,
+                                              String(candidate.id),
+                                            );
                                             setSubstitutePickerOpenFor(null);
                                           }}
                                         >
@@ -864,6 +1080,219 @@ export default function RequestDetailScreen() {
                 </View>
               ) : null}
 
+              {(detail.dutyImpacts?.length ?? 0) > 0 ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {showDutyDispositionEditor
+                      ? t('leaveDutyDispositionSection')
+                      : t('leaveDutyImpactSection')}
+                  </Text>
+                  {(detail.dutyImpacts ?? []).map((impact) => {
+                    const key = dutyImpactKey(impact);
+                    const required = impact.requiredAction === 'required';
+                    const title = (impact.title ?? '').trim() || t('dutyImpactUntitled');
+                    const saved = (detail.dutyDispositions ?? []).find(
+                      (item) => item.impactKey === key,
+                    );
+                    return (
+                      <View key={key} style={styles.itemCard}>
+                        <Text style={styles.itemTitle}>{title}</Text>
+                        {impact.workDate ? (
+                          <Text style={styles.itemMeta}>
+                            {t('leaveDutyImpactDate')}: {impact.workDate}
+                          </Text>
+                        ) : null}
+                        {impact.triggerType ? (
+                          <Text style={styles.itemMeta}>
+                            {t('leaveDutyImpactTrigger')}:{' '}
+                            {dutyTriggerLabel(impact.triggerType, t)}
+                          </Text>
+                        ) : null}
+                        {impact.overlapType === 'full' || impact.overlapType === 'partial' ? (
+                          <Text style={styles.itemMeta}>
+                            {t('leaveDutyImpactOverlap')}:{' '}
+                            {impact.overlapType === 'full'
+                              ? t('leaveDutyOverlapFull')
+                              : t('leaveDutyOverlapPartial')}
+                          </Text>
+                        ) : null}
+                        {impact.description ? (
+                          <Text style={styles.itemMeta}>{impact.description}</Text>
+                        ) : null}
+                        <Text style={styles.itemMeta}>
+                          {required
+                            ? t('leaveDutyImpactRequired')
+                            : t('leaveDutyImpactOptional')}
+                        </Text>
+                        {saved?.action ? (
+                          <Text style={styles.itemMeta}>
+                            {saved.action === 'reassign'
+                              ? t('leaveDutyDispositionReassign')
+                              : t('leaveDutyDispositionSkip')}
+                            {saved.assigneeMerchantAdminId
+                              ? ` (#${saved.assigneeMerchantAdminId})`
+                              : ''}
+                          </Text>
+                        ) : null}
+                        {showDutyDispositionEditor && required ? (
+                          dutyParentFieldByKey[key] ? (
+                            <Text style={styles.itemMeta}>
+                              {(() => {
+                                const parent = dutyParentFieldByKey[key];
+                                const inherited = parent
+                                  ? inheritDutyFromFieldAction(
+                                      fieldActionByJobId[String(parent.fieldJobId)],
+                                      fieldAssigneeByJobId[String(parent.fieldJobId)],
+                                    )
+                                  : null;
+                                if (!inherited) {
+                                  return t('leaveDutyInheritsFromFieldPending');
+                                }
+                                if (inherited.action === 'skip') {
+                                  return t('leaveDutyInheritsFromFieldSkip');
+                                }
+                                const assigneeId = inherited.assigneeMerchantAdminId ?? '';
+                                const found = fieldCandidatesByJobId[
+                                  String(parent?.fieldJobId)
+                                ]?.find((c) => String(c.id) === assigneeId);
+                                const name = found?.name || assigneeId;
+                                return t('leaveDutyInheritsFromFieldReassign', { name });
+                              })()}
+                            </Text>
+                          ) : (
+                            <View style={styles.fieldActionRow}>
+                              <Pressable
+                                style={[
+                                  styles.fieldActionBtn,
+                                  dutyActionByKey[key] === 'skip' && styles.fieldActionBtnActive,
+                                ]}
+                                onPress={() => {
+                                  setDutyActionByKey((prev) => ({ ...prev, [key]: 'skip' }));
+                                  setDutyAssigneeByKey((prev) => ({ ...prev, [key]: '' }));
+                                  setDutyPickerOpenFor(null);
+                                }}
+                              >
+                                <Text
+                                  style={[
+                                    styles.fieldActionBtnText,
+                                    dutyActionByKey[key] === 'skip' &&
+                                      styles.fieldActionBtnTextActive,
+                                  ]}
+                                >
+                                  {t('leaveDutyDispositionSkip')}
+                                </Text>
+                              </Pressable>
+                              <Pressable
+                                style={[
+                                  styles.fieldActionBtn,
+                                  dutyActionByKey[key] === 'reassign' &&
+                                    styles.fieldActionBtnActive,
+                                ]}
+                                onPress={() => {
+                                  setDutyActionByKey((prev) => ({
+                                    ...prev,
+                                    [key]: 'reassign',
+                                  }));
+                                }}
+                              >
+                                <Text
+                                  style={[
+                                    styles.fieldActionBtnText,
+                                    dutyActionByKey[key] === 'reassign' &&
+                                      styles.fieldActionBtnTextActive,
+                                  ]}
+                                >
+                                  {t('leaveDutyDispositionReassign')}
+                                </Text>
+                              </Pressable>
+                            </View>
+                          )
+                        ) : null}
+                        {showDutyDispositionEditor &&
+                        required &&
+                        !dutyParentFieldByKey[key] &&
+                        dutyActionByKey[key] === 'reassign' ? (
+                          <View style={styles.subPickerWrap}>
+                            <Pressable
+                              style={styles.subPickerTrigger}
+                              onPress={() => {
+                                const nextOpen = dutyPickerOpenFor === key ? null : key;
+                                setDutyPickerOpenFor(nextOpen);
+                                if (nextOpen) {
+                                  void loadDutyAssigneeCandidates(key, impact);
+                                }
+                              }}
+                            >
+                              <Text style={styles.subPickerTriggerText}>
+                                {(() => {
+                                  const selectedId = dutyAssigneeByKey[key];
+                                  if (!selectedId) return t('leaveDutySelectAssignee');
+                                  const found = dutyCandidatesByKey[key]?.find(
+                                    (c) => String(c.id) === selectedId,
+                                  );
+                                  return found?.name || selectedId;
+                                })()}
+                              </Text>
+                              <Ionicons
+                                name={dutyPickerOpenFor === key ? 'chevron-up' : 'chevron-down'}
+                                size={18}
+                                color={colors.textMuted}
+                              />
+                            </Pressable>
+                            {dutyPickerOpenFor === key ? (
+                              <View style={styles.subPickerList}>
+                                {dutyCandidatesLoading[key] ? (
+                                  <View style={styles.subPickerLoading}>
+                                    <ActivityIndicator color={colors.primary} />
+                                  </View>
+                                ) : (dutyCandidatesByKey[key] ?? []).length === 0 ? (
+                                  <Text style={styles.subPickerEmpty}>
+                                    {t('leaveDutyNoAssignees')}
+                                  </Text>
+                                ) : (
+                                  (dutyCandidatesByKey[key] ?? []).map((candidate) => {
+                                    const selected =
+                                      dutyAssigneeByKey[key] === String(candidate.id);
+                                    return (
+                                      <Pressable
+                                        key={String(candidate.id)}
+                                        style={[
+                                          styles.subPickerOption,
+                                          selected && styles.subPickerOptionSelected,
+                                        ]}
+                                        onPress={() => {
+                                          setDutyAssigneeByKey((prev) => ({
+                                            ...prev,
+                                            [key]: String(candidate.id),
+                                          }));
+                                          setDutyPickerOpenFor(null);
+                                        }}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.subPickerOptionText,
+                                            selected && styles.subPickerOptionTextSelected,
+                                          ]}
+                                        >
+                                          {candidate.name}
+                                        </Text>
+                                      </Pressable>
+                                    );
+                                  })
+                                )}
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                  {approveBlockedByDutyLinkage ? (
+                    <Text style={styles.upgradeHint}>{t('leaveDutyReviewUpgrade')}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>{t('reason')}</Text>
                 <Text style={styles.reasonBody}>{detail.reason}</Text>
@@ -916,10 +1345,14 @@ export default function RequestDetailScreen() {
                   <Text style={styles.rejectBtnText}>{t('requestReject')}</Text>
                 </Pressable>
                 <Pressable
-                  disabled={reviewBusy || approveBlockedByFieldLinkage}
+                  disabled={reviewBusy || approveBlockedByLinkage}
                   onPress={() => {
                     if (approveBlockedByFieldLinkage) {
                       Alert.alert(t('requestDetailTitle'), t('leaveFieldReviewUpgrade'));
+                      return;
+                    }
+                    if (approveBlockedByDutyLinkage) {
+                      Alert.alert(t('requestDetailTitle'), t('leaveDutyReviewUpgrade'));
                       return;
                     }
                     const fieldError = validateFieldDispositionsForApprove();
@@ -927,11 +1360,16 @@ export default function RequestDetailScreen() {
                       Alert.alert(t('requestDetailTitle'), fieldError);
                       return;
                     }
+                    const dutyError = validateDutyDispositionsForApprove();
+                    if (dutyError) {
+                      Alert.alert(t('requestDetailTitle'), dutyError);
+                      return;
+                    }
                     setReviewTarget({ approved: true });
                   }}
                   style={[
                     styles.approveBtn,
-                    (reviewBusy || approveBlockedByFieldLinkage) && styles.btnDisabled,
+                    (reviewBusy || approveBlockedByLinkage) && styles.btnDisabled,
                   ]}
                 >
                   <Text style={styles.approveBtnText}>{t('requestApprove')}</Text>

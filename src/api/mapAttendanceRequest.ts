@@ -234,6 +234,8 @@ export type AttendanceRequestDetail = LeaveRequest & {
   leaveItemsDetail?: AppAttendanceLeaveItem[];
   fieldImpacts?: AppAttendanceFieldImpact[];
   fieldDispositions?: AppAttendanceFieldDisposition[];
+  dutyImpacts?: import('./types').AppAttendanceDutyImpact[];
+  dutyDispositions?: import('./types').AppAttendanceDutyDisposition[];
 };
 
 /** API → 详情展示模型 */
@@ -262,6 +264,8 @@ export function mapAttendanceRequestDetail(row: MerchantAttendanceRequest): Atte
     leaveItemsDetail: row.leaveItems,
     fieldImpacts: row.fieldImpacts,
     fieldDispositions: row.fieldDispositions,
+    dutyImpacts: row.dutyImpacts,
+    dutyDispositions: row.dutyDispositions,
   };
 }
 
@@ -332,6 +336,7 @@ export function mapAttendanceRequestToLeaveRequest(
         : undefined,
     fieldJob,
     fieldImpacts: type === 'leave' ? row.fieldImpacts : undefined,
+    dutyImpacts: type === 'leave' ? row.dutyImpacts : undefined,
   };
 }
 
@@ -380,6 +385,7 @@ export type SubmitAttendanceInput =
       leaveDateFrom: string;
       leaveDateTo: string;
       acknowledgedFieldJobIds?: number[];
+      acknowledgedDutyImpactKeys?: string[];
     }
   | {
       type: 'leave';
@@ -388,6 +394,7 @@ export type SubmitAttendanceInput =
       fieldJobId: string;
       workDate: string;
       acknowledgedFieldJobIds?: number[];
+      acknowledgedDutyImpactKeys?: string[];
     }
   | {
       type: 'leave';
@@ -399,6 +406,7 @@ export type SubmitAttendanceInput =
       /** 多段/同日多班：key 为 `workDate|scheduleId` */
       leaveTimesByScheduleKey?: Record<string, LeaveTimeSpan>;
       acknowledgedFieldJobIds?: number[];
+      acknowledgedDutyImpactKeys?: string[];
     }
   | {
       type: 'missed_punch';
@@ -429,6 +437,9 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
       ...(input.acknowledgedFieldJobIds?.length
         ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
         : {}),
+      ...(input.acknowledgedDutyImpactKeys?.length
+        ? { acknowledgedDutyImpactKeys: input.acknowledgedDutyImpactKeys }
+        : {}),
     };
   }
   if (input.type === 'leave' && 'source' in input && input.source === 'field') {
@@ -439,6 +450,9 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
       reason: normalizeSubmitReason(input.reason),
       ...(input.acknowledgedFieldJobIds?.length
         ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
+        : {}),
+      ...(input.acknowledgedDutyImpactKeys?.length
+        ? { acknowledgedDutyImpactKeys: input.acknowledgedDutyImpactKeys }
         : {}),
     };
   }
@@ -453,6 +467,9 @@ export function buildAttendanceCreateBody(input: SubmitAttendanceInput): AppAtte
       }),
       ...(input.acknowledgedFieldJobIds?.length
         ? { acknowledgedFieldJobIds: input.acknowledgedFieldJobIds }
+        : {}),
+      ...(input.acknowledgedDutyImpactKeys?.length
+        ? { acknowledgedDutyImpactKeys: input.acknowledgedDutyImpactKeys }
         : {}),
     };
   }

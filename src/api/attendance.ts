@@ -73,6 +73,20 @@ export function previewLeaveFieldImpacts(
   );
 }
 
+export function previewLeaveDutyImpacts(
+  storeId: string | number,
+  body: LeaveFieldImpactPreviewBody,
+) {
+  return apiRequest<{ dutyImpacts?: import('./types').AppAttendanceDutyImpact[] }>(
+    '/api/v1/app/attendance/requests/preview-leave-duty-impacts',
+    {
+      method: 'POST',
+      storeId,
+      body,
+    },
+  );
+}
+
 /** POST /api/v1/app/attendance/requests */
 export function createAttendanceRequest(
   storeId: string | number,

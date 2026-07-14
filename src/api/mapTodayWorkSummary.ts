@@ -1,5 +1,6 @@
 import type {
   CurrentPunchAction,
+  DutyItem,
   TimelineFieldJobItem,
   TimelineStoreShiftItem,
   TodayWorkSummary,
@@ -222,6 +223,37 @@ export function mapTodayWorkSummary(input: unknown): TodayWorkSummary {
   const source = Object.keys(summaryRaw).length > 0 ? summaryRaw : raw;
   const currentRaw = asRecord(source.currentPunchAction || source.current_punch_action);
 
+  const mapDuty = (item: unknown): DutyItem => {
+    const r = asRecord(item);
+    return {
+      id: asString(r.id),
+      templateId: asString(r.templateId || r.template_id) || undefined,
+      title: asString(r.title),
+      description: asString(r.description) || undefined,
+      triggerType: asString(r.triggerType || r.trigger_type, 'clock_in'),
+      required: asBool(r.required ?? true),
+      publishedCellId: asString(r.publishedCellId || r.published_cell_id) || undefined,
+      sequenceNo: r.sequenceNo !== undefined || r.sequence_no !== undefined
+        ? asNumber(r.sequenceNo ?? r.sequence_no)
+        : undefined,
+      status: asString(r.status, 'pending'),
+      windowStart: asString(r.windowStart || r.window_start) || undefined,
+      windowEnd: asString(r.windowEnd || r.window_end) || undefined,
+      dueAt: asString(r.dueAt || r.due_at) || undefined,
+    };
+  };
+
+  const pendingRaw = Array.isArray(source.pendingDuties)
+    ? source.pendingDuties
+    : Array.isArray(source.pending_duties)
+      ? source.pending_duties
+      : [];
+  const todayRaw = Array.isArray(source.todayDuties)
+    ? source.todayDuties
+    : Array.isArray(source.today_duties)
+      ? source.today_duties
+      : [];
+
   return {
     date: asString(source.date),
     timeline: buildTimeline(source),
@@ -235,5 +267,12 @@ export function mapTodayWorkSummary(input: unknown): TodayWorkSummary {
       source.blockPublicHolidays === undefined && source.block_public_holidays === undefined
         ? false
         : asBool(source.blockPublicHolidays ?? source.block_public_holidays),
+    currentDutyAction: asString(source.currentDutyAction || source.current_duty_action, 'NONE') as TodayWorkSummary['currentDutyAction'],
+    pendingDuties: pendingRaw.map(mapDuty).filter((d) => d.id),
+    todayDuties: todayRaw.map(mapDuty).filter((d) => d.id),
+    canPunch:
+      source.canPunch === undefined && source.can_punch === undefined
+        ? true
+        : asBool(source.canPunch ?? source.can_punch),
   };
 }

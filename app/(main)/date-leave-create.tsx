@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { normalizeSubmitReason } from '../../src/api/mapAttendanceRequest';
-import { previewLeaveFieldImpacts } from '../../src/api/attendance';
+import { previewLeaveDutyImpacts, previewLeaveFieldImpacts } from '../../src/api/attendance';
 import { CalendarDatePickerModal } from '../../src/components/CalendarDatePickerModal';
 import { useAuth } from '../../src/context/AuthContext';
 import { colors } from '../../src/theme/colors';
@@ -26,7 +26,8 @@ import { calendarDateKey } from '../../src/utils/calendarDateKey';
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
 import { addDaysLocal, compareDateKeys, parseDateKey } from '../../src/utils/localDateTime';
 import { getApproximateServerNowDate } from '../../src/utils/serverClock';
-import { supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import { supportsLeaveDutyLinkage, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
+import { confirmRequiredDutyImpacts, visibleDutyImpacts } from '../../src/utils/leaveDutyImpact';
 import { confirmRequiredFieldImpacts } from '../../src/utils/leaveFieldImpact';
 
 const MAX_DAYS = 90;
@@ -103,6 +104,7 @@ export default function DateLeaveCreateScreen() {
     }
     setSubmitBusy(true);
     let acknowledgedFieldJobIds: number[] | undefined;
+    let acknowledgedDutyImpactKeys: string[] | undefined;
     if (supportsLeaveFieldV2() && selectedStoreId) {
       try {
         const preview = await previewLeaveFieldImpacts(selectedStoreId, {
@@ -126,6 +128,28 @@ export default function DateLeaveCreateScreen() {
         return;
       }
     }
+    if (supportsLeaveDutyLinkage() && selectedStoreId) {
+      try {
+        const preview = await previewLeaveDutyImpacts(selectedStoreId, {
+          leaveDateFrom: startDate,
+          leaveDateTo: endDate,
+        });
+        const ack = await confirmRequiredDutyImpacts(
+          visibleDutyImpacts(preview.dutyImpacts),
+          t,
+        );
+        if (ack === null) {
+          setSubmitBusy(false);
+          return;
+        }
+        if (ack.length > 0) acknowledgedDutyImpactKeys = ack;
+      } catch (e) {
+        setSubmitBusy(false);
+        const message = e instanceof Error ? e.message : t('requestSubmitFailed');
+        Alert.alert(t('dateLeaveTitle'), message);
+        return;
+      }
+    }
     const res = await submitAttendanceRequest({
       type: 'leave',
       mode: 'date_range',
@@ -133,6 +157,7 @@ export default function DateLeaveCreateScreen() {
       leaveDateFrom: startDate,
       leaveDateTo: endDate,
       acknowledgedFieldJobIds,
+      acknowledgedDutyImpactKeys,
     });
     setSubmitBusy(false);
     if (!res.ok) {

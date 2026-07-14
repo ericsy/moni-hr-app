@@ -227,6 +227,44 @@ export type FieldLeaveDispositionRequest = {
   assigneeMerchantAdminId?: number;
 };
 
+export type DutyLeaveDispositionRequest = {
+  impactKey: string;
+  templateId?: number;
+  workDate?: string;
+  publishedCellId?: number | null;
+  /** skip | reassign */
+  action: 'skip' | 'reassign';
+  assigneeMerchantAdminId?: number;
+};
+
+export type AppAttendanceDutyImpact = {
+  id?: number;
+  leaveItemId?: number;
+  templateId: number;
+  publishedCellId?: number | null;
+  workDate?: string;
+  triggerType?: string;
+  overlapType?: string;
+  requiredAction?: string;
+  title?: string;
+  description?: string;
+  windowStart?: string;
+  windowEnd?: string;
+  assignmentMode?: string;
+  impactKey: string;
+};
+
+export type AppAttendanceDutyDisposition = {
+  id?: number;
+  impactKey: string;
+  templateId?: number;
+  workDate?: string;
+  publishedCellId?: number | null;
+  action?: string;
+  assigneeMerchantAdminId?: number | null;
+  source?: string;
+};
+
 export type AppAttendanceFieldImpact = {
   id?: number;
   leaveItemId?: number;
@@ -272,6 +310,9 @@ export type AppAttendanceRequestCreate = {
   /** 新版：已确认须处置的外勤 fieldJobId */
   acknowledgedFieldJobIds?: number[];
   fieldDispositions?: FieldLeaveDispositionRequest[];
+  /** 已确认须处置的 Duty impactKey */
+  acknowledgedDutyImpactKeys?: string[];
+  dutyDispositions?: DutyLeaveDispositionRequest[];
 };
 
 export type ScheduleSubstitutionBrief = {
@@ -337,6 +378,8 @@ export type AppAttendanceRequest = {
   leaveItems?: AppAttendanceLeaveItem[];
   fieldImpacts?: AppAttendanceFieldImpact[];
   fieldDispositions?: AppAttendanceFieldDisposition[];
+  dutyImpacts?: AppAttendanceDutyImpact[];
+  dutyDispositions?: AppAttendanceDutyDisposition[];
 };
 
 export type AppAttendanceRequestList = {
@@ -352,6 +395,7 @@ export type AppAttendanceRequestReview = {
   reviewComment?: string;
   substitutions?: LeaveSubstitutionReviewItem[];
   fieldDispositions?: FieldLeaveDispositionRequest[];
+  dutyDispositions?: DutyLeaveDispositionRequest[];
 };
 
 export type MerchantEmployeeBrief = {

@@ -66,6 +66,23 @@ export interface CurrentPunchAction {
   buttonLabel?: string;
 }
 
+export interface DutyItem {
+  id: string;
+  templateId?: string;
+  title: string;
+  description?: string;
+  triggerType: 'clock_in' | 'clock_out' | 'recurring' | string;
+  required: boolean;
+  publishedCellId?: string;
+  sequenceNo?: number;
+  status: string;
+  windowStart?: string;
+  windowEnd?: string;
+  dueAt?: string;
+}
+
+export type DutyActionType = 'DUTY_CLOCK_IN' | 'DUTY_CLOCK_OUT' | 'DUTY_RECURRING' | 'NONE';
+
 export interface TodayWorkSummary {
   date: string;
   timeline: TodayWorkTimelineItem[];
@@ -75,6 +92,11 @@ export interface TodayWorkSummary {
   clockPunchEnabled?: boolean;
   /** 门店是否屏蔽公共假期排班（与打卡无关） */
   blockPublicHolidays?: boolean;
+  currentDutyAction?: DutyActionType;
+  pendingDuties?: DutyItem[];
+  todayDuties?: DutyItem[];
+  /** false 时须先完成必做 duty，再打卡 */
+  canPunch?: boolean;
 }
 
 export interface EmployeePunchPayload {

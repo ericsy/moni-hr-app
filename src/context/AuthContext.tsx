@@ -48,6 +48,11 @@ import { mapEmployeeToUser } from '../api/mapEmployeeUser';
 import type { AppAccountLookupStatus, AppAttendanceFieldImpact } from '../api/types';
 import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../api/types';
+import {
+  cancelAllDutyLocalNotifications,
+  clearPushRegistration,
+  syncPushRegistration,
+} from '../notifications/dutyPush';
 import { pickAccessToken } from '../api/types';
 import i18n, { setAppLanguage } from '../i18n';
 import {
@@ -196,6 +201,7 @@ export type LeaveRequest = {
   };
   /** 店班/按日期请假关联的外勤影响（用于占用外勤请假入口） */
   fieldImpacts?: AppAttendanceFieldImpact[];
+  dutyImpacts?: import('../api/types').AppAttendanceDutyImpact[];
 };
 
 type Session = {
@@ -271,6 +277,7 @@ type AuthContextValue = {
     reviewComment?: string,
     substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
     fieldDispositions?: import('../api/types').FieldLeaveDispositionRequest[],
+    dutyDispositions?: import('../api/types').DutyLeaveDispositionRequest[],
   ) => Promise<{ ok: boolean; message?: string }>;
   /** 撤回本人待审批申请 */
   cancelAttendanceRequest: (id: string) => Promise<{ ok: boolean; message?: string }>;
@@ -331,6 +338,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(null);
     setSession(null);
     resetServerClockState();
+    await cancelAllDutyLocalNotifications();
     await Promise.all([AsyncStorage.removeItem(AUTH_KEY), AsyncStorage.removeItem(TOKEN_KEY)]);
   }, []);
 
@@ -418,6 +426,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }
             }
             await refreshSessionFromApi(rawToken, bootStoreId);
+            if (!stale()) {
+              void syncPushRegistration(languageRef.current);
+            }
           } catch (e) {
             if (stale()) return;
             if (e instanceof ApiError && e.code === 401) {
@@ -466,6 +477,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         resetUnauthorizedGuard();
         resetSessionExpiredAlert();
         await persistAuth({ user }, token);
+        void syncPushRegistration(languageRef.current);
         return { ok: true };
       } catch (e) {
         const message =
@@ -499,11 +511,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     if (accessTokenRef.current) {
       try {
+        await clearPushRegistration();
+      } catch {
+        // ignore
+      }
+      try {
         await logoutSession();
       } catch {
         // 本地仍清除会话
       }
     }
+    await cancelAllDutyLocalNotifications();
     resetUnauthorizedGuard();
     resetSessionExpiredAlert();
     resetServerClockState();
@@ -566,6 +584,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         resetUnauthorizedGuard();
         resetSessionExpiredAlert();
         await persistAuth({ user }, token);
+        void syncPushRegistration(languageRef.current);
         return { ok: true };
       } catch (e) {
         const message = e instanceof ApiError ? e.message : undefined;
@@ -625,6 +644,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     languageRef.current = lng;
     setAppLanguage(lng);
     await AsyncStorage.setItem(LANG_KEY, lng);
+    if (accessTokenRef.current) {
+      void syncPushRegistration(lng);
+    }
   }, []);
 
   const changePassword = useCallback(
@@ -925,6 +947,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       reviewComment?: string,
       substitutions?: import('../api/types').LeaveSubstitutionReviewItem[],
       fieldDispositions?: import('../api/types').FieldLeaveDispositionRequest[],
+      dutyDispositions?: import('../api/types').DutyLeaveDispositionRequest[],
     ): Promise<{ ok: boolean; message?: string }> => {
       const storeId = session?.user.selectedStoreId;
       if (!storeId) {
@@ -940,6 +963,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           reviewComment: trimmed,
           substitutions: substitutions?.length ? substitutions : undefined,
           fieldDispositions: fieldDispositions?.length ? fieldDispositions : undefined,
+          dutyDispositions: dutyDispositions?.length ? dutyDispositions : undefined,
         });
         await refreshAttendanceRequests();
         return { ok: true };

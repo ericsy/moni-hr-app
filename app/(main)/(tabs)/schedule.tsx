@@ -23,11 +23,13 @@ import {
 } from '../../../src/api/mapPublishedSchedule';
 import { fetchMyPublishedSchedule } from '../../../src/api/schedule';
 import { fetchTodayWorkSummary } from '../../../src/api/todayWork';
+import { DutyGateModal } from '../../../src/components/DutyGateModal';
 import { FieldJobRow } from '../../../src/components/FieldJobRow';
 import { SchedulePunchHeroCard } from '../../../src/components/SchedulePunchHeroCard';
 import { TodayShiftRow } from '../../../src/components/TodayShiftRow';
 import { getActiveStore, useAuth } from '../../../src/context/AuthContext';
 import { useRefreshOnAppForeground } from '../../../src/hooks/useRefreshOnAppForeground';
+import { syncDutyLocalNotifications } from '../../../src/notifications/dutyPush';
 import { colors } from '../../../src/theme/colors';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../../src/utils/calendarDateKey';
 import { formatSelectedHeaderLine } from '../../../src/utils/localeDateFormat';
@@ -110,6 +112,7 @@ export default function ScheduleScreen() {
   const [allFieldJobs, setAllFieldJobs] = useState<TimelineFieldJobItem[]>([]);
   const [fieldTimeline, setFieldTimeline] = useState<TodayWorkTimelineItem[]>([]);
   const [workSummary, setWorkSummary] = useState<TodayWorkSummary | null>(null);
+  const [dutyModalOpen, setDutyModalOpen] = useState(false);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const punchesKnown = isShiftPunchDateLoaded(todayIso);
@@ -165,17 +168,26 @@ export default function ScheduleScreen() {
     if (!selectedStoreId) {
       setFieldTimeline([]);
       setWorkSummary(null);
+      setDutyModalOpen(false);
       return;
     }
     try {
       const summary = await fetchTodayWorkSummary({ storeId: selectedStoreId, date: todayIso });
       setWorkSummary(summary);
       setFieldTimeline(summary.timeline);
+      const pending = summary.pendingDuties || [];
+      const dutyAction = summary.currentDutyAction || 'NONE';
+      setDutyModalOpen(pending.length > 0 && dutyAction !== 'NONE');
+      const lang = (language === 'zh' || (i18n.language || '').startsWith('zh') ? 'zh' : 'en') as
+        | 'en'
+        | 'zh';
+      void syncDutyLocalNotifications(summary.todayDuties || summary.pendingDuties || [], lang);
     } catch {
       setFieldTimeline([]);
       setWorkSummary(null);
+      setDutyModalOpen(false);
     }
-  }, [selectedStoreId, todayIso]);
+  }, [selectedStoreId, todayIso, language, i18n.language]);
 
   useEffect(() => {
     const resolved = resolveFieldJobsForSchedule(todayShifts, fieldTimeline, todayIso);
@@ -373,6 +385,19 @@ export default function ScheduleScreen() {
   );
 
   const onHeroPunch = useCallback(async () => {
+    if (workSummary && workSummary.canPunch === false) {
+      const pending = workSummary.pendingDuties || [];
+      if (pending.length > 0) {
+        setDutyModalOpen(true);
+        Alert.alert(
+          t('tabSchedule'),
+          (i18n.language || '').startsWith('zh')
+            ? '请先完成必做任务后再打卡'
+            : 'Complete required duties before punching',
+        );
+        return;
+      }
+    }
     const action = resolveHeroWorkAction({
       workAction: workSummary?.currentPunchAction,
       activeFieldJob,
@@ -492,6 +517,7 @@ export default function ScheduleScreen() {
     selectedStoreId,
     loadTodayPunches,
     t,
+    i18n.language,
     heroSlot,
     runPunch,
     getShiftPunch,
@@ -887,6 +913,26 @@ export default function ScheduleScreen() {
           </View>
         </View>
       </Modal>
+
+      <DutyGateModal
+        visible={dutyModalOpen}
+        storeId={selectedStoreId}
+        date={todayIso}
+        duties={workSummary?.pendingDuties || []}
+        action={workSummary?.currentDutyAction}
+        onClose={() => setDutyModalOpen(false)}
+        onUpdated={(summary) => {
+          setWorkSummary(summary);
+          setFieldTimeline(summary.timeline);
+          const pending = summary.pendingDuties || [];
+          const dutyAction = summary.currentDutyAction || 'NONE';
+          setDutyModalOpen(pending.length > 0 && dutyAction !== 'NONE');
+          const lang = (language === 'zh' || (i18n.language || '').startsWith('zh') ? 'zh' : 'en') as
+            | 'en'
+            | 'zh';
+          void syncDutyLocalNotifications(summary.todayDuties || summary.pendingDuties || [], lang);
+        }}
+      />
     </SafeAreaView>
   );
 }
