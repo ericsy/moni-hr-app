@@ -36,6 +36,8 @@ type Props = {
   missedPunchOpen?: ShiftMissedPunchOpenStatus;
   /** 该班次关联的待审批/已通过请假（用于状态文案） */
   leaveRequestStatus?: ShiftLeaveRequestStatus;
+  /** 门店免打卡：隐藏打卡按钮与打卡状态，仅保留请假 */
+  clockPunchEnabled?: boolean;
 };
 
 export function MyShiftCard({
@@ -55,9 +57,11 @@ export function MyShiftCard({
   missedPunchPendingStatus = 'none',
   missedPunchOpen,
   leaveRequestStatus = 'none',
+  clockPunchEnabled = true,
 }: Props) {
   const { t } = useTranslation();
   const [applyOpen, setApplyOpen] = useState(false);
+  const punchExempt = !clockPunchEnabled;
 
   const displayRange = slot.range;
   const actions = getShiftCardActions(
@@ -74,14 +78,19 @@ export function MyShiftCard({
   let statusKey = actions.statusKey;
   let statusParams = actions.statusParams;
   let statusWarn = actions.emphasizeMissedApply;
-  if (actions.showStatus && leaveRequestStatus === 'pending') {
+  let showStatus = actions.showStatus && !punchExempt;
+  if (leaveRequestStatus === 'pending') {
     statusKey = 'shiftStatusLeavePending';
     statusParams = undefined;
     statusWarn = false;
-  } else if (actions.showStatus && leaveRequestStatus === 'approved') {
+    showStatus = true;
+  } else if (leaveRequestStatus === 'approved') {
     statusKey = 'shiftStatusLeaveApproved';
     statusParams = undefined;
     statusWarn = false;
+    showStatus = true;
+  } else if (punchExempt) {
+    showStatus = false;
   } else if (actions.showStatus && missedPunchOpen?.coverage === 'full') {
     statusKey =
       missedPunchOpen.approval === 'approved'
@@ -106,16 +115,18 @@ export function MyShiftCard({
     statusWarn = false;
   }
 
-  const statusText = actions.showStatus
+  const statusText = showStatus
     ? statusParams?.time
       ? t(statusKey, statusParams)
       : t(statusKey)
     : '';
 
-  const showMissedApplyAvailable = actions.showMissedApply && !missedPunchApplyBlocked;
+  const showMissedApplyAvailable =
+    !punchExempt && actions.showMissedApply && !missedPunchApplyBlocked;
   const leaveApplyAvailable = !leaveApplyBlocked;
   const showApplyEntry = showMissedApplyAvailable || leaveApplyAvailable;
-  const hasSideActions = actions.showClockIn || actions.showClockOut || showApplyEntry;
+  const hasSideActions =
+    (!punchExempt && (actions.showClockIn || actions.showClockOut)) || showApplyEntry;
 
   return (
     <View style={styles.card}>
@@ -131,10 +142,14 @@ export function MyShiftCard({
           </View>
           <Text style={styles.cardMetaLbl}>{t('scheduleRegion')}</Text>
           <Text style={styles.cardMetaVal}>{slot.areaName}</Text>
-          <Text style={[styles.cardMetaLbl, styles.cardMetaLblAfter]}>{t('scheduleShift')}</Text>
-          <Text style={styles.cardMetaVal}>{slot.shiftName}</Text>
+          {slot.shiftName?.trim() && slot.shiftName.trim() !== '—' ? (
+            <>
+              <Text style={[styles.cardMetaLbl, styles.cardMetaLblAfter]}>{t('scheduleShift')}</Text>
+              <Text style={styles.cardMetaVal}>{slot.shiftName}</Text>
+            </>
+          ) : null}
 
-          {actions.showStatus ? (
+          {showStatus ? (
             <View style={styles.statusRow}>
               <Ionicons
                 color={statusWarn ? colors.warning : colors.primary}
@@ -150,7 +165,7 @@ export function MyShiftCard({
 
         {hasSideActions ? (
           <View style={styles.actionsCol}>
-            {actions.showClockIn ? (
+            {!punchExempt && actions.showClockIn ? (
               <Pressable
                 accessibilityLabel={t('clockIn')}
                 disabled={punchBusy}
@@ -167,7 +182,7 @@ export function MyShiftCard({
                 )}
               </Pressable>
             ) : null}
-            {actions.showClockOut ? (
+            {!punchExempt && actions.showClockOut ? (
               <Pressable
                 accessibilityLabel={t('clockOut')}
                 disabled={punchBusy}
@@ -184,7 +199,18 @@ export function MyShiftCard({
                 )}
               </Pressable>
             ) : null}
-            {showApplyEntry ? (
+            {punchExempt && leaveApplyAvailable ? (
+              <Pressable
+                accessibilityLabel={t('shiftApplyLeave')}
+                disabled={punchBusy}
+                onPress={onApplyLeave}
+                style={[styles.sideBtnApply, punchBusy && styles.sideBtnDisabled]}
+              >
+                <Ionicons color={colors.primaryDark} name="calendar-outline" size={20} />
+                <Text style={styles.sideBtnApplyText}>{t('shiftApplyLeave')}</Text>
+              </Pressable>
+            ) : null}
+            {!punchExempt && showApplyEntry ? (
               <Pressable
                 accessibilityLabel={t('shiftApply')}
                 disabled={punchBusy}
@@ -200,7 +226,7 @@ export function MyShiftCard({
               </Pressable>
             ) : null}
 
-            {applyOpen ? (
+            {!punchExempt && applyOpen ? (
               <View style={styles.applyMenu}>
                 {showMissedApplyAvailable ? (
                   <Pressable

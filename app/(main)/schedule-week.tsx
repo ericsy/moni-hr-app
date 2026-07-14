@@ -671,7 +671,9 @@ export default function ScheduleWeekScreen() {
                       <View style={styles.storeShiftGroup}>
                         <View style={styles.storeShiftHead}>
                           <View style={styles.storeShiftLabelWrap}>
-                            <Text style={styles.storeShiftLabel}>{sh.shiftName}</Text>
+                            {sh.shiftName?.trim() ? (
+                              <Text style={styles.storeShiftLabel}>{sh.shiftName}</Text>
+                            ) : null}
                             {sh.isSubstitution ? (
                               <View style={styles.storeShiftSubBadge}>
                                 <Text style={styles.storeShiftSubBadgeText}>
@@ -771,6 +773,8 @@ export default function ScheduleWeekScreen() {
                 s.overnightRole ?? 'normal',
                 pairPunch,
               );
+              const clockPunchEnabled =
+                workSummariesByDate[selected]?.clockPunchEnabled !== false;
               const missedPunchApplyBlocked =
                 missedPunchPendingStatus === 'full' ||
                 missedPunchBlockedByLeave ||
@@ -778,8 +782,9 @@ export default function ScheduleWeekScreen() {
               const leaveApplyBlocked =
                 leavePending ||
                 s.isSubstitution === true ||
-                doesPunchCoverScheduledShift(punch, s.range) ||
-                isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, selected, s, s.range);
+                (clockPunchEnabled && doesPunchCoverScheduledShift(punch, s.range)) ||
+                (clockPunchEnabled &&
+                  isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, selected, s, s.range));
               const openApply = (type: 'missed_punch' | 'leave') => {
                 setRequestScheduleContext({ workDate: selected, slots: myShifts });
                 openShiftRequest({ type, workDate: selected, slots: myShifts, slotIndex });
@@ -799,6 +804,7 @@ export default function ScheduleWeekScreen() {
                     missedPunchOpen={missedPunchOpen}
                     leaveRequestStatus={leaveRequestStatus}
                     leaveApplyBlocked={leaveApplyBlocked}
+                    clockPunchEnabled={clockPunchEnabled}
                     onClockIn={() => void runPunch(s.id, 'in')}
                     onClockOut={() => void runPunch(s.id, 'out')}
                     onApplyMissed={() => {
@@ -835,6 +841,7 @@ export default function ScheduleWeekScreen() {
                       nested
                       workDateIso={selected}
                       attendanceRequests={myAttendanceRequests}
+                      clockPunchEnabled={clockPunchEnabled}
                     />
                   ))}
                 </View>
@@ -848,6 +855,9 @@ export default function ScheduleWeekScreen() {
                     job={job}
                     workDateIso={selected}
                     attendanceRequests={myAttendanceRequests}
+                    clockPunchEnabled={
+                      workSummariesByDate[selected]?.clockPunchEnabled !== false
+                    }
                   />
                 ))}
               </View>

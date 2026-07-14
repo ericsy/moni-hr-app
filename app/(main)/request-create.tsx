@@ -37,7 +37,7 @@ import { calendarDateKey, normalizeDateKeyOrToday } from '../../src/utils/calend
 import { formatPunchHeaderDate } from '../../src/utils/formatPunchTime';
 import { supportsLeaveFieldV1, supportsLeaveFieldV2 } from '../../src/utils/clientCapability';
 import { findLeaveCoveringFieldJob } from '../../src/utils/fieldLeaveEligibility';
-import { confirmRequiredFieldImpacts, visibleFieldImpacts } from '../../src/utils/leaveFieldImpact';
+import { confirmRequiredFieldImpacts, sameFieldImpactPreview, visibleFieldImpacts } from '../../src/utils/leaveFieldImpact';
 import {
   buildLeaveTimesByScheduleKey,
   resolveEffectiveLeaveScope,
@@ -56,6 +56,7 @@ import {
   addDaysLocal,
   hmFromShiftRange,
   parseDateKey,
+  parseScheduledHmRange,
   startOfWeekMondayLocal,
 } from '../../src/utils/localDateTime';
 import {
@@ -172,8 +173,13 @@ export default function RequestCreateScreen() {
   /** 提交成功准备跳转时关闭时间滚轮，避免 Android Modal 与页面卸载竞态 */
   const [leavePickersEnabled, setLeavePickersEnabled] = useState(true);
   const [fieldImpactPreview, setFieldImpactPreview] = useState<AppAttendanceFieldImpact[]>([]);
-  const [fieldImpactPreviewLoading, setFieldImpactPreviewLoading] = useState(false);
+  const fieldImpactPreviewRef = useRef<AppAttendanceFieldImpact[]>([]);
+  const fieldImpactReqSeqRef = useRef(0);
   const closingAfterSubmitRef = useRef(false);
+
+  useEffect(() => {
+    fieldImpactPreviewRef.current = fieldImpactPreview;
+  }, [fieldImpactPreview]);
 
   const selectedStoreId = session?.user?.selectedStoreId ?? '';
   const isFieldFromRoute = sanitizeRouteParam(params.source) === 'field';
@@ -429,6 +435,35 @@ export default function RequestCreateScreen() {
       isFullLeaveBlockedForShift(myAttendanceRequests, workDate, slot, getShiftPunch(workDate, slot)),
     [getShiftPunch, myAttendanceRequests],
   );
+  const getShiftPunchRef = useRef(getShiftPunch);
+  const isFullLeaveBlockedRef = useRef(isFullLeaveBlocked);
+  getShiftPunchRef.current = getShiftPunch;
+  isFullLeaveBlockedRef.current = isFullLeaveBlocked;
+
+  const leaveFieldImpactQueryKey = useMemo(() => {
+    const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
+    const times = buildLeaveTimesByScheduleKey(
+      shifts,
+      publishedScheduleByDate,
+      leaveScopeByKey,
+      partialLeaveByKey,
+      getShiftPunch,
+      isFullLeaveBlocked,
+    );
+    return JSON.stringify({
+      storeId: selectedStoreId,
+      shifts: shifts.map((s) => shiftSelectionKeyFromBinding(s)).sort(),
+      times,
+    });
+  }, [
+    selectedStoreId,
+    selectedShiftKeys,
+    publishedScheduleByDate,
+    leaveScopeByKey,
+    partialLeaveByKey,
+    getShiftPunch,
+    isFullLeaveBlocked,
+  ]);
 
   useEffect(() => {
     if (type !== 'leave') return;
@@ -507,50 +542,49 @@ export default function RequestCreateScreen() {
 
   useEffect(() => {
     if (type !== 'leave' || isFieldLeave || !supportsLeaveFieldV1() || !selectedStoreId) {
+      fieldImpactReqSeqRef.current += 1;
       setFieldImpactPreview([]);
       return;
     }
     const shifts = buildShiftsFromSelection(selectedShiftKeys, publishedScheduleByDate);
     if (shifts.length === 0) {
+      fieldImpactReqSeqRef.current += 1;
       setFieldImpactPreview([]);
       return;
     }
     let cancelled = false;
+    const seq = ++fieldImpactReqSeqRef.current;
     const timer = setTimeout(() => {
       void (async () => {
-        setFieldImpactPreviewLoading(true);
         try {
           const leaveTimesByScheduleKey = buildLeaveTimesByScheduleKey(
             shifts,
             publishedScheduleByDate,
             leaveScopeByKey,
             partialLeaveByKey,
-            getShiftPunch,
-            isFullLeaveBlocked,
+            getShiftPunchRef.current,
+            isFullLeaveBlockedRef.current,
           );
           const leaveItems = buildLeaveItemsPayload(shifts, { leaveTimesByScheduleKey });
           const preview = await previewLeaveFieldImpacts(selectedStoreId, { leaveItems });
-          if (!cancelled) setFieldImpactPreview(visibleFieldImpacts(preview.fieldImpacts));
+          if (cancelled || seq !== fieldImpactReqSeqRef.current) return;
+          const next = visibleFieldImpacts(preview.fieldImpacts);
+          if (!sameFieldImpactPreview(fieldImpactPreviewRef.current, next)) {
+            setFieldImpactPreview(next);
+          }
         } catch {
-          if (!cancelled) setFieldImpactPreview([]);
-        } finally {
-          if (!cancelled) setFieldImpactPreviewLoading(false);
+          if (cancelled || seq !== fieldImpactReqSeqRef.current) return;
+          // 失败时：已有列表保留；没有则保持不渲染
         }
       })();
-    }, 400);
+    }, 450);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [
-    type,
-    isFieldLeave,
-    selectedStoreId,
-    selectedShiftKeys,
-    leaveScopeByKey,
-    partialLeaveByKey,
-    publishedScheduleByDate,
-  ]);
+    // leaveFieldImpactQueryKey 已序列化选班/整段部分/时段，避免回调引用变化重复请求
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional query key gate
+  }, [type, isFieldLeave, leaveFieldImpactQueryKey]);
 
   /** 打卡加载后，将已选部分时段限制在可请假范围内 */
   useEffect(() => {
@@ -1601,12 +1635,18 @@ export default function RequestCreateScreen() {
                 (scope === 'partial' && partialDefault ? partialDefault : undefined);
               const showPerShiftPartial =
                 checked && !blocked && scope === 'partial' && partialScenario && partial;
+              const showLeaveTimeRow = checked && !blocked && !!partialScenario;
+              const fullRange = parseScheduledHmRange(slot.range);
+              const displayFrom =
+                scope === 'partial' && partial ? partial.from : (fullRange?.start ?? '');
+              const displayTo =
+                scope === 'partial' && partial ? partial.to : (fullRange?.end ?? '');
               const partialHintKey =
-                partialScenario?.kind === 'clocked_in_only'
+                showPerShiftPartial && partialScenario?.kind === 'clocked_in_only'
                   ? 'leavePartialClockedInHint'
-                  : partialScenario?.kind === 'early_departure'
+                  : showPerShiftPartial && partialScenario?.kind === 'early_departure'
                     ? 'leavePartialEarlyDepartureHint'
-                    : partialScenario?.kind === 'late_arrival_with_out'
+                    : showPerShiftPartial && partialScenario?.kind === 'late_arrival_with_out'
                       ? 'leavePartialLateArrivalHint'
                       : null;
               return (
@@ -1711,35 +1751,46 @@ export default function RequestCreateScreen() {
                       ) : null}
                     </View>
                   ) : null}
-                  {showPerShiftPartial ? (
+                  {showLeaveTimeRow && partialScenario && displayFrom && displayTo ? (
                     <View style={styles.shiftPartialTime}>
-                      {partialHintKey ? (
-                        <Text style={styles.shiftPartialHint}>{t(partialHintKey)}</Text>
-                      ) : null}
+                      <Text
+                        style={[
+                          styles.shiftPartialHint,
+                          !partialHintKey ? styles.shiftPartialHintHidden : null,
+                        ]}
+                      >
+                        {partialHintKey ? t(partialHintKey) : ' '}
+                      </Text>
                       <View style={styles.leaveTimeRangeRow}>
                         <View style={styles.leaveTimeCol}>
                           <Text style={styles.leaveTimeColLabel}>{t('leaveTimeFrom')}</Text>
                           <TimeSelectField
-                            value={partial.from}
+                            value={displayFrom}
                             onChange={(v) => updatePartialLeave(key, { from: v }, partialScenario)}
-                            wheelAnchor={partial.from}
-                            minHm={partialScenario.fromMin}
-                            maxHm={partialScenario.fromMax}
-                            locked={!!partialScenario.fromFixed}
-                            disabled={!leavePickersEnabled}
+                            wheelAnchor={displayFrom}
+                            minHm={
+                              showPerShiftPartial ? partialScenario.fromMin : displayFrom
+                            }
+                            maxHm={
+                              showPerShiftPartial ? partialScenario.fromMax : displayFrom
+                            }
+                            locked={
+                              !showPerShiftPartial || !!partialScenario.fromFixed
+                            }
+                            disabled={!leavePickersEnabled || !showPerShiftPartial}
                           />
                         </View>
                         <Text style={styles.leaveTimeRangeSep}>–</Text>
                         <View style={styles.leaveTimeCol}>
                           <Text style={styles.leaveTimeColLabel}>{t('leaveTimeTo')}</Text>
                           <TimeSelectField
-                            value={partial.to}
+                            value={displayTo}
                             onChange={(v) => updatePartialLeave(key, { to: v }, partialScenario)}
-                            wheelAnchor={partial.to}
-                            minHm={partialScenario.toMin}
-                            maxHm={partialScenario.toMax}
-                            locked={!!partialScenario.toFixed}
-                            disabled={!leavePickersEnabled}
+                            wheelAnchor={displayTo}
+                            minHm={showPerShiftPartial ? partialScenario.toMin : displayTo}
+                            maxHm={showPerShiftPartial ? partialScenario.toMax : displayTo}
+                            locked={!showPerShiftPartial || !!partialScenario.toFixed}
+                            disabled={!leavePickersEnabled || !showPerShiftPartial}
                           />
                         </View>
                       </View>
@@ -1755,14 +1806,10 @@ export default function RequestCreateScreen() {
           <Text style={styles.leaveTimeHint}>{t('leaveTimePickShiftHint')}</Text>
         ) : null}
 
-        {supportsLeaveFieldV1() && (fieldImpactPreviewLoading || fieldImpactPreview.length > 0) ? (
+        {supportsLeaveFieldV1() && fieldImpactPreview.length > 0 ? (
           <View style={styles.fieldImpactPanel}>
             <Text style={styles.fieldImpactTitle}>{t('leaveFieldImpactSection')}</Text>
-            {fieldImpactPreviewLoading ? (
-              <ActivityIndicator color={colors.primary} style={styles.fieldImpactLoading} />
-            ) : (
-              <FieldImpactPreviewList impacts={fieldImpactPreview} />
-            )}
+            <FieldImpactPreviewList impacts={fieldImpactPreview} />
           </View>
         ) : null}
       </View>
@@ -1979,7 +2026,6 @@ const styles = StyleSheet.create({
   fieldImpactBody: { marginTop: 6, fontSize: 12, color: colors.textMuted, lineHeight: 18 },
   fieldImpactRequiredHint: { marginTop: 8, fontSize: 12, fontWeight: '700', color: colors.warning },
   fieldImpactOptionalHint: { marginTop: 8, fontSize: 12, color: colors.textMuted },
-  fieldImpactLoading: { marginTop: 8 },
   dayCellWeek: {
     fontSize: 10,
     fontWeight: '700',
@@ -2114,7 +2160,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textMuted,
     marginBottom: 8,
+    minHeight: 18,
   },
+  shiftPartialHintHidden: { opacity: 0 },
   chipCompact: { paddingVertical: 8, paddingHorizontal: 12 },
   slotList: { marginTop: 8, gap: 8 },
   slotCard: {

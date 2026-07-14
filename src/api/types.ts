@@ -100,8 +100,9 @@ export type AppEmployeeScheduleItem = {
   id: number;
   areaId: number;
   areaName: string;
-  shiftId: number;
-  shiftName: string;
+  /** 自由时段可为 null */
+  shiftId?: number | null;
+  shiftName?: string | null;
   date_str: string;
   startTime: string;
   endTime: string;
@@ -127,8 +128,9 @@ export type AppStoreScheduleItem = {
   id: number;
   areaId: number;
   areaName: string;
-  shiftId: number;
-  shiftName: string;
+  /** 自由时段可为 null */
+  shiftId?: number | null;
+  shiftName?: string | null;
   date_str: string;
   startTime: string;
   endTime: string;

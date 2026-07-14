@@ -151,6 +151,12 @@ export type RequestShiftBinding = {
   scheduledRange: string;
   overnightRole?: 'start' | 'end' | 'normal';
   overnightPairCellId?: string;
+  /** 请假子项：整段/部分（多班次时按段区分） */
+  leaveScope?: 'full' | 'partial';
+  /** 服务端推导：full | late_in | early_out */
+  leaveEffect?: 'full' | 'late_in' | 'early_out' | string;
+  partialStartTime?: string;
+  partialEndTime?: string;
 };
 
 export type LeaveRequest = {

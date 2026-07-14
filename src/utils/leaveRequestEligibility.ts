@@ -58,19 +58,101 @@ export function getShiftLeaveRequestStatus(
   return req.status === 'approved' ? 'approved' : 'pending';
 }
 
-/** 该班次在请假申请中是否为整段（单段请假或无法区分时按整段） */
+/** 该班次在请假申请中是否为整段（优先子项 leaveScope，其次 leaveTime） */
 export function isFullLeaveForShiftInRequest(
   request: LeaveRequest,
   workDate: string,
   slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
 ): boolean {
   const target = toTarget(workDate, slotOrTarget);
-  const inRequest = request.shifts.some((s) => bindingMatchesTarget(s, target));
-  if (!inRequest) return false;
-  if (request.shifts.length === 1) {
-    return (request.leaveTime?.mode ?? 'full') === 'full';
-  }
+  const binding = request.shifts.find((s) => bindingMatchesTarget(s, target));
+  if (!binding) return false;
+  if (binding.leaveScope === 'partial') return false;
+  if (binding.leaveScope === 'full') return true;
+  if (binding.leaveEffect === 'late_in' || binding.leaveEffect === 'early_out') return false;
+  if (binding.leaveEffect === 'full') return true;
+  if (request.leaveTime?.mode === 'partial') return false;
   return (request.leaveTime?.mode ?? 'full') === 'full';
+}
+
+function hmToMinutes(hm: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hm.trim());
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function classifyPartialLeaveEffect(
+  fromHm: string,
+  toHm: string,
+  shiftRange: string,
+): 'late_in' | 'early_out' | null {
+  const rangeMatch = /(\d{1,2}:\d{2}).*?[–—−‐‑‒-].*?(\d{1,2}:\d{2})/.exec(
+    shiftRange.replace(/\s+/g, ' ').trim(),
+  );
+  if (!rangeMatch) return null;
+  const startMin = hmToMinutes(rangeMatch[1]);
+  const endMin = hmToMinutes(rangeMatch[2]);
+  const fromMin = hmToMinutes(fromHm);
+  const toMin = hmToMinutes(toHm);
+  if (startMin == null || endMin == null || fromMin == null || toMin == null) return null;
+  if (fromMin === startMin && toMin === endMin) return null;
+  // 对齐后端 AttendanceClockLinkageService.resolveLeaveEffect
+  if (fromMin > startMin && (toMin === endMin || toMin > startMin)) return 'late_in';
+  if (fromMin === startMin && toMin < endMin) return 'early_out';
+  return null;
+}
+
+/** 已通过部分请假对打卡窗的调整（对齐后端 AppClockPunchService.validateTimeWindow） */
+export type LeavePunchWindowAdjust = {
+  effect: 'late_in' | 'early_out';
+  fromHm: string;
+  toHm: string;
+  partialFromMin: number;
+  partialToMin: number;
+};
+
+/**
+ * 已审批部分请假：晚来放宽上班最早时刻；早走放宽下班最早时刻。
+ * 整段请假或待审不返回（整段由 Hero 排除；待审仍按原排班窗）。
+ */
+export function getApprovedLeavePunchWindowAdjust(
+  requests: LeaveRequest[],
+  workDate: string,
+  slotOrTarget: ShiftMatchTarget | Pick<MyPublishedShiftSlot, 'id' | 'range' | 'areaName' | 'shiftName'>,
+): LeavePunchWindowAdjust | undefined {
+  const target = toTarget(workDate, slotOrTarget);
+  const req = requests.find((r) => {
+    if (r.type !== 'leave' || r.status !== 'approved') return false;
+    return r.shifts.some((s) => bindingMatchesTarget(s, target));
+  });
+  if (!req || isFullLeaveForShiftInRequest(req, workDate, slotOrTarget)) return undefined;
+
+  const binding = req.shifts.find((s) => bindingMatchesTarget(s, target));
+  const fromHm =
+    binding?.partialStartTime ??
+    (req.leaveTime?.mode === 'partial' ? req.leaveTime.from : undefined);
+  const toHm =
+    binding?.partialEndTime ??
+    (req.leaveTime?.mode === 'partial' ? req.leaveTime.to : undefined);
+  if (!fromHm || !toHm) return undefined;
+
+  const range =
+    ('range' in slotOrTarget && typeof (slotOrTarget as { range?: string }).range === 'string'
+      ? (slotOrTarget as { range: string }).range
+      : undefined) ??
+    binding?.scheduledRange ??
+    '';
+  const effectRaw = (binding?.leaveEffect ?? '').toLowerCase();
+  const effect =
+    effectRaw === 'late_in' || effectRaw === 'early_out'
+      ? effectRaw
+      : classifyPartialLeaveEffect(fromHm, toHm, range);
+  if (!effect) return undefined;
+
+  const partialFromMin = hmToMinutes(fromHm);
+  const partialToMin = hmToMinutes(toHm);
+  if (partialFromMin == null || partialToMin == null) return undefined;
+  return { effect, fromHm, toHm, partialFromMin, partialToMin };
 }
 
 /** 待审批/已通过的整段请假占用班次时，不可再提交漏打卡 */

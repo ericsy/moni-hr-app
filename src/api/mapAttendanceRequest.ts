@@ -68,6 +68,15 @@ function mapLeaveItemToBinding(item: AppAttendanceLeaveItem, index: number): Req
     : workDate
       ? `cell:${workDate}|${item.publishedCellId}`
       : undefined;
+  const scope = (item.leaveScope ?? '').toLowerCase();
+  const effect = (item.leaveEffect ?? '').toLowerCase();
+  const partialFrom = hmFromIsoOrTime(item.partialStartTime);
+  const partialTo = hmFromIsoOrTime(item.partialEndTime);
+  // 仅 late_in/early_out 或显式 partial 视为部分请假；勿因整段请假也带起止时间而误判
+  const isPartial =
+    effect === 'late_in' ||
+    effect === 'early_out' ||
+    (scope === 'partial' && effect !== 'full');
   return {
     workDate,
     slotIndex: index,
@@ -76,6 +85,10 @@ function mapLeaveItemToBinding(item: AppAttendanceLeaveItem, index: number): Req
     areaName: '—',
     shiftName: '—',
     scheduledRange,
+    leaveScope: isPartial ? 'partial' : 'full',
+    leaveEffect: effect || (isPartial ? undefined : 'full'),
+    partialStartTime: isPartial ? partialFrom : undefined,
+    partialEndTime: isPartial ? partialTo : undefined,
   };
 }
 

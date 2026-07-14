@@ -11,6 +11,8 @@ import { getApproximateServerNowDate } from './serverClock';
 import { isMissedPunchRequestBlocking } from './missedPunchEligibility';
 
 export const FIELD_PUNCH_OUT_LATE_MINUTES = 30;
+/** 与后端 AppTodayWorkService.FIELD_EARLY_MINUTES 一致 */
+export const FIELD_PUNCH_IN_EARLY_MINUTES = 15;
 
 function parseHm(value: string): number | null {
   const m = value.trim().match(/^(\d{1,2}):(\d{2})/);
@@ -130,6 +132,38 @@ export function isPastFieldScheduledEnd(
   if (compareDateKeys(workDate, todayIso) > 0) return false;
   const endAt = fieldMissedEligibleAfter(job, 'out');
   return endAt != null && now.getTime() >= endAt.getTime();
+}
+
+/** 是否处于外勤开始打卡窗口（计划开始−提前量 ~ 计划结束） */
+export function isInFieldInPunchWindow(
+  job: TimelineFieldJobItem,
+  now: Date = getApproximateServerNowDate(),
+): boolean {
+  const startAt = fieldScheduledStartAt(job);
+  const endAt = fieldMissedEligibleAfter(job, 'out');
+  if (!startAt || !endAt) return false;
+  const windowStart = new Date(startAt.getTime() - FIELD_PUNCH_IN_EARLY_MINUTES * 60_000);
+  const endMs = endAt.getTime() >= startAt.getTime() ? endAt.getTime() : endAt.getTime() + 86_400_000;
+  const t = now.getTime();
+  return t >= windowStart.getTime() && t <= endMs;
+}
+
+/** Hero：当前可「开始服务」的外勤（未打上班、在开始窗内、未请假覆盖） */
+export function findPunchableFieldClockInJob(
+  jobs: TimelineFieldJobItem[],
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): TimelineFieldJobItem | undefined {
+  const sorted = [...jobs].sort((a, b) =>
+    fieldJobStartSortKey(a).localeCompare(fieldJobStartSortKey(b)),
+  );
+  for (const job of sorted) {
+    if (job.leaveApproved || findLeaveCoveringFieldJob(requests, job.id)) continue;
+    if (job.fieldClockInAt) continue;
+    if (!isInFieldInPunchWindow(job, now)) continue;
+    return job;
+  }
+  return undefined;
 }
 
 /** 是否处于外勤完成打卡窗口（计划结束 ~ 结束+宽限） */
@@ -283,6 +317,27 @@ export function shouldShowFieldHeroInService(
 ): boolean {
   if (job.leaveApproved) return false;
   return !!job.fieldClockInAt && !job.fieldClockOutAt && !isPastFieldScheduledEnd(job, now);
+}
+
+function fieldJobStartSortKey(job: TimelineFieldJobItem): string {
+  return jobHm(job.start);
+}
+
+/** Hero 外勤不完整：已过打卡窗且仍缺卡（按计划开始时间取最早一条） */
+export function findHeroIncompleteFieldJob(
+  jobs: TimelineFieldJobItem[],
+  requests: LeaveRequest[] = [],
+  now: Date = getApproximateServerNowDate(),
+): TimelineFieldJobItem | undefined {
+  const sorted = [...jobs].sort((a, b) =>
+    fieldJobStartSortKey(a).localeCompare(fieldJobStartSortKey(b)),
+  );
+  for (const job of sorted) {
+    if (getFieldJobDisplayState(job, requests, now) === 'incomplete') {
+      return job;
+    }
+  }
+  return undefined;
 }
 
 export function isStoreMissedPunchBlockedByFieldSync(

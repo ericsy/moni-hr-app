@@ -46,6 +46,7 @@ function formatShiftRange(startTime?: string, endTime?: string): string {
 }
 
 function shiftGroupKey(shiftName: string, range: string, isSubstitution: boolean): string {
+  // 无班次名时仅按时段合并，避免空名与「—」拆成多组
   return `${isSubstitution ? 'sub' : 'normal'}\0${shiftName}\0${range}`;
 }
 
@@ -84,7 +85,7 @@ export function groupStorePublishedScheduleByDate(
     if (!dateKey) continue;
 
     const areaName = item.areaName?.trim() || '—';
-    const shiftName = item.shiftName?.trim() || '—';
+    const shiftName = item.shiftName?.trim() || '';
     const range = formatShiftRange(item.startTime, item.endTime);
     const isSubstitution = item.isSubstitution === true;
     const originalDisplayName = item.originalDisplayName?.trim() || undefined;

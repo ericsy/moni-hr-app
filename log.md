@@ -1,5 +1,63 @@
 # moni-hr-app 变更日志
 
+## 2026-07-11
+
+- **未同步外勤不挡店班下班**：`fieldBlocksHeroStoreClockOut` 仅在外勤开启「同步店班下班」且服务中时挡住店班离店；未同步时可正常打店班下班卡。
+- **重叠下班 Hero 顺序**：先推外勤下班，完成后再推店班下班（后端 `currentPunchAction` + Hero/`onHeroPunch` 对齐）。
+- **店班可无上班直接下班**：到下班窗未打上班也推离店下班；打过下班即视为该班完成（不再因缺上班显示不完整）。
+- **店班下班窗改为 30 分钟**：`CLOCK_OUT_AFTER_END_MIN` 20 → 30，与后端对齐。
+- **商家端创建员工邮箱二次确认**：新建员工保存前弹窗确认邮箱地址。
+- **Hero 打卡后不刷新**：店班走 `runPunch` 成功后补拉 `today-work`，避免 `currentPunchAction` 过期导致须手动刷新才进入下一状态。
+- **已请假班次不进 Hero**：Hero 选班/可上班推送改为 `hasOpenLeaveForShift`（待审/已通过均排除），避免后面已请假班次被当成「打卡不完整」抢走焦点。
+- **部分请假进 Hero 并调窗**：仅整段请假排除 Hero；已通过部分请假按后端规则调打卡窗（`late_in` 上班最早=partialStart，`early_out` 下班最早=partialEnd），Hero 文案/倒计时同步。
+- **整段请假后 Hero 仍「等待中」**：无外勤时未把「全部店班整段请假」收成 DONE；且后端 `WAITING` + 本地无店班 Hero 焦点时应显示「已完成」。整段请假若带起止时间会被误判为部分请假，已修正映射；Hero 对整段请假班次强制视为已完成。
+- **强制打卡工时口径（商家端/后端）**：门店考勤设置可配置强制打卡实际工时按「打卡时段」或「排班净时长」计算；App 打卡流程不变，仅影响商家端员工统计实际工时口径。
+- **Stores Radio TS 修复**：antd `Radio` 与 lucide 图标重名冲突已处理。
+- **请假审核替班 NPE**：无班次（自由时段）排班请假审批通过时，`ScheduleSubstitutionService` 对空 `shiftId` 安全处理。
+- **商家端深链刷新白屏**：Vite `base` 改为绝对路径，修复员工统计等页面浏览器刷新空白。
+
+- **Hero 外勤开始优先于早班店班上班窗**：当前已进入外勤开始打卡窗时，后端/App 优先推外勤开始，不再被仍开着的早班（如 09:00–17:00）店班上班窗盖住。
+- **请假外勤影响展示**：仅当预览确有重叠外勤时才渲染「外勤影响」区块；不先占位/loading 再隐藏。切换整段/部分时静默刷新，内容相同则不重绘。
+- **无班次占位「自定义」**：排班管理/模版未选班次时，班次名位置显示灰色「自定义 / Custom」。
+- **模版无班次编辑显示乱串**：编辑/添加员工时，无 `shiftId` 不再写入 `makeShiftPresetKey` 到 Select，避免显示 `store::...` 拼接串；卡片标题仅在有班次时显示名称。
+- **未选班次可填休息时长**：`Rosters` / `RosterTemplate` 班次弹窗在未选班次时可编辑休息分钟；选中班次时休息只读并取自预设。模版 cell 增加 `breakMinutes` 读写与保存，应用模版时带入排班。
+- **排班未选班次时工时按满时段显示**：添加班次默认 `breakMinutes` 由 30 改为 0；清空班次选择时同步清零休息，避免 8 小时时段被显示成 7.5 小时。选中班次预设仍沿用预设休息时长。
+- **排班/模版时间输入对齐外勤**：`Rosters`、`RosterTemplate` 班次弹窗开始/结束时间由 Ant `TimePicker` 改为与外勤相同的 `HourMinuteTimePicker`（时/分数字输入）。
+- **确认出勤表宽对齐、一周无横滑**：`AttendanceConfirmPanel` 表格改为 `table-layout: fixed; width: 100%`，去掉日列 `minWidth`，单元格控件纵向紧凑排布，仅纵向滚动；确认出勤页不展示左侧说明栏；合计列与员工列居中；时间改用与外勤相同的 `HourMinuteTimePicker`（时/分数字输入）；时间同行显示为 `HH:mm – HH:mm`，休/注带标签。
+- **确认出勤矩阵布局**：`AttendanceConfirmPanel` 改为员工为行、周一至周日为列；单元格内可改出勤/时段/休息/备注，行末显示该员工本周合计。
+- **门店屏蔽公共假期串店修复**：编辑弹窗关闭/切换门店时重置 `blockPublicHolidays` 本地状态；详情面板按 `store.id` 强制重挂载；隐藏 Tab 仅当 `blockPublicHolidays === true`；保存后以接口返回的该店字段为准，避免串到其他门店。
+- **门店屏蔽公共假期时隐藏「公共假期」Tab**：`Stores` 编辑弹窗与详情面板在 `blockPublicHolidays === true` 时不展示公共假期 Tab；编辑中开启屏蔽会自动切离该 Tab。
+
+## 2026-07-10
+
+- **免打卡「确认出勤」**：排班管理在门店关闭打卡时增加「确认出勤」Tab；按周展示当周之前已发布排班，可调整实际出勤并确认入库；员工统计中免打卡店实际工时改为累计已确认净工时（多店分别计算后相加）。
+  - **后端**：`migrate-schedule_attendance_confirm.sql`；`MerchantAttendanceConfirmService` + API `GET/PUT .../schedule/attendance-confirm`；`MerchantEmployeeStatisticsService` 免打卡 actual 改读确认记录。
+  - **商家端**：`AttendanceConfirmPanel`；`Rosters` Tab；`merchantApi` 对接。
+- **排班班次可选（自由时段）**：排班管理/模版可不选班次，直接填开始/结束时间；有班次时时间锁定。区域↔员工视图按 `area+date+start+end` 合并（不再含班次）。
+  - **后端**（`moni-hr`）：迁移 `migrate-schedule_cell-optional_shift.sql`；`shift_id` 可空；`ScheduleShiftSnapshot` 支持无班次；跨夜配对双方皆无班次时按员工集合配对。
+  - **商家端**（`moni-hr-merchant`）：`rosterGridIndex` slot key；`Rosters`/`RosterTemplate` 班次可清空 + 时间可编辑；保存 payload 允许无 `shiftId`。
+  - **App**：`shiftId`/`shiftName` 可空；无班次名时只展示时段/区域（`MyShiftCard`/`TodayShiftRow`/整店排班）。
+- **门店免打卡 UI**：`clockPunchEnabled === false` 时隐藏 Hero；排班列表仅保留请假审批状态与请假按钮（隐藏打卡/漏打卡状态与入口）。
+  - **`schedule.tsx`** / **`schedule-week.tsx`**：传入 `clockPunchEnabled`；请假拦截忽略打卡覆盖/漏打卡互斥。
+  - **`TodayShiftRow`** / **`MyShiftCard`** / **`FieldJobRow`**：免打卡时仅请假徽章与直接「请假」按钮。
+  - **`SchedulePunchHeroCard`**：免打卡时返回 `null`（由日排班页隐藏）。
+  - `blockPublicHolidays` 仅商家端隐藏公共假期，与 App 打卡无关。
+
+## 2026-07-09
+
+- **排班 Hero 打卡状态逻辑**：按店班/外勤分层展示，优先级为可打卡动作 > 外勤服务中 > 外勤开始打卡 > 外勤/店班过窗不完整 > 店班已打卡等待 > 店班不完整。
+  - **`SchedulePunchHeroCard`**：店班过窗缺卡不再显示绿色「已打卡」；外勤过完成窗缺卡显示「打卡不完整」+ 申请漏打卡；新增 `FieldIncompleteHeroBody`。
+  - **`fieldMissedPunchEligibility.ts`**：新增 `findHeroIncompleteFieldJob`（按计划开始取最早不完整外勤）。
+  - **`scheduleHeroShift.ts`**：`shiftStatusPastIncomplete` 徽章改为 `incomplete`；`pickHeroShiftIndex` 过窗不完整店班优先于普通已打卡等待。
+  - **`TodayShiftRow`**：新增红色「打卡不完整」店班徽章。
+  - **`schedule.tsx`**：Hero 传入外勤列表与漏打卡申请回调。
+  - i18n：`shiftBadgeIncomplete`、`punchHeroApplyMissedPunch`。
+- **多班衔接：A 漏下班不挡 B 上班**：店班 B 进入上班窗后 Hero / `currentPunchAction` 优先推 B 上班打卡，A 漏下班仅在列表标「打卡不完整」并保留漏打卡入口。
+  - **`pickHeroShiftIndex`**：可上班（score 0）> 可下班（1）> 过窗不完整（2）。
+  - **`findPunchableStoreClockInSlot`**：扫描当日可上班店班。
+  - **`schedule.tsx`**：`resolveHeroWorkAction` 后若另有店班可上班，覆盖 `WAITING` / 前段 `STORE_CLOCK_OUT`。
+  - **后端 `AppTodayWorkService`**：`pendingStoreIn` 提前于 `pendingStoreOut`。
+
 ## 2026-07-06
 
 - **外勤服务类型改为手动输入（商家端）**：`moni-hr-merchant` 外勤表单服务类型由下拉改为自由文本；员工 App 无需改动（`formatFieldServiceType` 对未知值原样展示）。

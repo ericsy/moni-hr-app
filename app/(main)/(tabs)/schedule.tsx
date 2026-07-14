@@ -32,6 +32,7 @@ import { colors } from '../../../src/theme/colors';
 import { calendarDateKey, normalizeDateKeyOrToday } from '../../../src/utils/calendarDateKey';
 import { formatSelectedHeaderLine } from '../../../src/utils/localeDateFormat';
 import {
+  getApprovedLeavePunchWindowAdjust,
   getShiftLeaveRequestStatus,
   hasOpenFullLeaveForShift,
   isMissedPunchBlockedByLeave,
@@ -42,13 +43,14 @@ import {
 } from '../../../src/utils/missedPunchEligibility';
 import { openShiftRequest } from '../../../src/utils/openShiftRequest';
 import { countPendingApprovals, shouldSplitRequestViews } from '../../../src/utils/requestApproval';
-import { pickHeroShiftIndex } from '../../../src/utils/scheduleHeroShift';
+import { findPunchableStoreClockInSlot, pickHeroShiftIndex } from '../../../src/utils/scheduleHeroShift';
 import {
   canApplyMissedPunchKind,
   canApplyMissedPunchForShift,
   getShiftCardActions,
 } from '../../../src/utils/shiftClockWindow';
-import { shouldHideStoreMissedPunchApply } from '../../../src/utils/fieldMissedPunchEligibility';
+import { preferredFieldMissedPunchKind, shouldHideStoreMissedPunchApply } from '../../../src/utils/fieldMissedPunchEligibility';
+import { openFieldMissedPunchRequest } from '../../../src/utils/openFieldRequest';
 import { doesPunchCoverScheduledShift } from '../../../src/utils/shiftLeaveEligibility';
 import { getApproximateServerNowDate } from '../../../src/utils/serverClock';
 import { findActiveFieldJob, resolveFieldJobsForSchedule } from '../../../src/utils/fieldJobsSchedule';
@@ -58,6 +60,7 @@ import {
   fieldBlocksHeroStoreClockOut,
   isClockInWorkAction,
   isClockOutWorkAction,
+  isFieldWorkPunchAction,
   isWorkPunchActionEnabled,
   resolveHeroWorkAction,
 } from '../../../src/utils/workPunch';
@@ -233,7 +236,9 @@ export default function ScheduleScreen() {
         (s) => getShiftPunch(todayIso, s),
         getPairPunch,
         punchesKnown,
+        // 仅整段请假不参与 Hero；部分请假仍参与并按请假时段调窗
         (s) => hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, s),
+        (s) => getApprovedLeavePunchWindowAdjust(myAttendanceRequests, todayIso, s),
       ),
     [
       todayShifts,
@@ -252,29 +257,66 @@ export default function ScheduleScreen() {
     () => fieldTimeline.filter((item): item is TimelineFieldJobItem => item.type === 'field_job'),
     [fieldTimeline],
   );
-  const workAction = useMemo(
-    () =>
-      resolveHeroWorkAction({
-        workAction: workSummary?.currentPunchAction,
-        activeFieldJob,
-        fieldJobs: fieldJobsToday,
-        storeShifts: todayShifts,
-        requests: myAttendanceRequests,
-        workDateIso: todayIso,
-      }),
-    [
-      workSummary?.currentPunchAction,
+  const workAction = useMemo(() => {
+    let action = resolveHeroWorkAction({
+      workAction: workSummary?.currentPunchAction,
       activeFieldJob,
-      fieldJobsToday,
+      fieldJobs: fieldJobsToday,
+      storeShifts: todayShifts,
+      requests: myAttendanceRequests,
+      workDateIso: todayIso,
+      // 无店班 Hero 焦点时，WAITING 应收成 DONE（避免整段请假后仍显示等待中）
+      storeHeroExhausted: todayShifts.length > 0 && heroIndex < 0,
+    });
+    const punchableStoreIn = findPunchableStoreClockInSlot(
       todayShifts,
-      myAttendanceRequests,
       todayIso,
-    ],
-  );
+      todayIso,
+      (s) => getShiftPunch(todayIso, s),
+      getPairPunch,
+      punchesKnown,
+      (s) => hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, s),
+      (s) => getApprovedLeavePunchWindowAdjust(myAttendanceRequests, todayIso, s),
+    );
+    const isFieldClockInAction =
+      action?.action === 'FIELD_CLOCK_IN' || action?.action === 'FIELD_CLOCK_IN_SYNC_STORE';
+    if (
+      punchableStoreIn &&
+      !isFieldClockInAction &&
+      (!action ||
+        action.action === 'WAITING' ||
+        action.action === 'DONE' ||
+        (action.action === 'STORE_CLOCK_OUT' &&
+          action.refType === 'store_shift' &&
+          String(action.refId) !== punchableStoreIn.id))
+    ) {
+      action = {
+        action: 'STORE_CLOCK_IN',
+        refType: 'store_shift',
+        refId: punchableStoreIn.id,
+        geofence: null,
+      };
+    }
+    return action;
+  }, [
+    workSummary?.currentPunchAction,
+    activeFieldJob,
+    fieldJobsToday,
+    todayShifts,
+    myAttendanceRequests,
+    todayIso,
+    getShiftPunch,
+    getPairPunch,
+    punchesKnown,
+    heroIndex,
+  ]);
   const hasVisibleTodayWork =
     todayShifts.length > 0 || totalFieldJobs > 0 || fieldTimeline.length > 0;
 
   const showHeroCard = useMemo(() => {
+    if (workSummary?.clockPunchEnabled === false) {
+      return false;
+    }
     if (!hasVisibleTodayWork) {
       return isWorkPunchActionEnabled(workAction);
     }
@@ -284,12 +326,13 @@ export default function ScheduleScreen() {
       workAction?.action === 'WAITING' ||
       workAction?.action === 'DONE'
     );
-  }, [hasVisibleTodayWork, heroSlot, workAction]);
+  }, [hasVisibleTodayWork, heroSlot, workAction, workSummary?.clockPunchEnabled]);
 
   const runPunch = useCallback(
     async (slot: MyPublishedShiftSlot) => {
       const punch = getShiftPunch(todayIso, slot);
       const pairPunch = getPairPunch(slot);
+      const leaveAdjust = getApprovedLeavePunchWindowAdjust(myAttendanceRequests, todayIso, slot);
       const actions = getShiftCardActions(
         todayIso,
         slot.range,
@@ -299,6 +342,7 @@ export default function ScheduleScreen() {
         punchesKnown,
         slot.overnightRole ?? 'normal',
         pairPunch,
+        leaveAdjust,
       );
       const kind = actions.showClockOut ? 'out' : 'in';
 
@@ -309,12 +353,23 @@ export default function ScheduleScreen() {
           Alert.alert(t('tabSchedule'), r.message ?? t('punchFailed'));
           return;
         }
+        // 同步刷新 today-work，否则 Hero 仍停在旧的 currentPunchAction，需手动下拉才进入下一状态
+        await loadTodayFieldJobs();
         Alert.alert(t('tabSchedule'), t('punchSuccess'));
       } finally {
         setPunchBusyId(null);
       }
     },
-    [getShiftPunch, getPairPunch, todayIso, punchesKnown, punchShift, t],
+    [
+      getShiftPunch,
+      getPairPunch,
+      todayIso,
+      punchesKnown,
+      punchShift,
+      loadTodayFieldJobs,
+      myAttendanceRequests,
+      t,
+    ],
   );
 
   const onHeroPunch = useCallback(async () => {
@@ -333,9 +388,41 @@ export default function ScheduleScreen() {
       now,
     });
 
+    // 重叠下班：先外勤完成，再店班离店
+    if (
+      isWorkPunchActionEnabled(action) &&
+      action &&
+      isClockOutWorkAction(action.action) &&
+      isFieldWorkPunchAction(action.action) &&
+      selectedStoreId
+    ) {
+      setPunchBusyId('work');
+      try {
+        const summary = await executeWorkPunch({ storeId: selectedStoreId, action });
+        setWorkSummary(summary);
+        setFieldTimeline(summary.timeline);
+        await loadTodayPunches();
+        Alert.alert(t('tabSchedule'), t('punchSuccess'));
+      } catch (e) {
+        if (e instanceof Error && e.message === 'LOCATION_PERMISSION_DENIED') {
+          Alert.alert(t('tabSchedule'), t('clockPermissionDenied'));
+          return;
+        }
+        Alert.alert(t('tabSchedule'), e instanceof Error ? e.message : t('punchFailed'));
+      } finally {
+        setPunchBusyId(null);
+      }
+      return;
+    }
+
     if (heroSlot && !hasOpenFullLeaveForShift(myAttendanceRequests, todayIso, heroSlot)) {
       const punch = getShiftPunch(todayIso, heroSlot);
       const pairPunch = getPairPunch(heroSlot);
+      const leaveAdjust = getApprovedLeavePunchWindowAdjust(
+        myAttendanceRequests,
+        todayIso,
+        heroSlot,
+      );
       const heroActions = getShiftCardActions(
         todayIso,
         heroSlot.range,
@@ -345,6 +432,7 @@ export default function ScheduleScreen() {
         punchesKnown,
         heroSlot.overnightRole ?? 'normal',
         pairPunch,
+        leaveAdjust,
       );
       if (heroActions.showClockOut && !heroPunchBlocked) {
         await runPunch(heroSlot);
@@ -446,6 +534,20 @@ export default function ScheduleScreen() {
       openShiftRequest({ type, workDate: todayIso, slots: todayShifts, slotIndex });
     },
     [todayShifts, todayIso, setRequestScheduleContext],
+  );
+
+  const onApplyHeroStoreMissedPunch = useCallback(() => {
+    if (heroIndex < 0) return;
+    openApply(heroIndex, 'missed_punch');
+  }, [heroIndex, openApply]);
+
+  const onApplyHeroFieldMissedPunch = useCallback(
+    (job: TimelineFieldJobItem) => {
+      const punchKind = preferredFieldMissedPunchKind(job, myAttendanceRequests);
+      if (!punchKind) return;
+      openFieldMissedPunchRequest({ job, punchKind, workDate: todayIso });
+    },
+    [myAttendanceRequests, todayIso],
   );
 
   return (
@@ -559,6 +661,12 @@ export default function ScheduleScreen() {
             punchBusy={punchBusyId === 'work' || (heroSlot ? punchBusyId === heroSlot.id : false)}
             workAction={workAction}
             activeFieldJob={activeFieldJob}
+            fieldJobs={fieldJobsToday}
+            attendanceRequests={myAttendanceRequests}
+            storeShifts={todayShifts}
+            clockPunchEnabled={workSummary?.clockPunchEnabled !== false}
+            onApplyStoreMissedPunch={heroIndex >= 0 ? onApplyHeroStoreMissedPunch : undefined}
+            onApplyFieldMissedPunch={onApplyHeroFieldMissedPunch}
             onPunch={onHeroPunch}
           />
         ) : null}
@@ -588,6 +696,19 @@ export default function ScheduleScreen() {
                   s,
                 );
                 const leavePending = leaveRequestStatus !== 'none';
+                // 列表徽章：仅整段请假显示「已请假」；部分请假走打卡状态
+                const leaveBadgeStatus = hasOpenFullLeaveForShift(
+                  myAttendanceRequests,
+                  todayIso,
+                  s,
+                )
+                  ? leaveRequestStatus
+                  : 'none';
+                const leavePunchAdjust = getApprovedLeavePunchWindowAdjust(
+                  myAttendanceRequests,
+                  todayIso,
+                  s,
+                );
                 const missedPunchBlockedByLeave = isMissedPunchBlockedByLeave(
                   myAttendanceRequests,
                   todayIso,
@@ -636,6 +757,7 @@ export default function ScheduleScreen() {
                   canStoreMissedIn,
                   canStoreMissedOut,
                 );
+                const clockPunchEnabled = workSummary?.clockPunchEnabled !== false;
                 const missedPunchApplyBlocked =
                   missedPunchPendingStatus === 'full' ||
                   missedPunchBlockedByLeave ||
@@ -644,8 +766,9 @@ export default function ScheduleScreen() {
                 const leaveApplyBlocked =
                   leavePending ||
                   s.isSubstitution === true ||
-                  doesPunchCoverScheduledShift(punch, s.range) ||
-                  isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, todayIso, s, s.range);
+                  (clockPunchEnabled && doesPunchCoverScheduledShift(punch, s.range)) ||
+                  (clockPunchEnabled &&
+                    isShiftLeaveBlockedByMissedPunch(myAttendanceRequests, todayIso, s, s.range));
                 return (
                   <View key={s.id} style={styles.shiftGroup}>
                     <TodayShiftRow
@@ -656,9 +779,11 @@ export default function ScheduleScreen() {
                       punch={punch}
                       pairPunch={pairPunch}
                       punchesKnown={punchesKnown}
-                      leaveRequestStatus={leaveRequestStatus}
+                      leaveRequestStatus={leaveBadgeStatus}
+                      leavePunchAdjust={leavePunchAdjust}
                       missedPunchApplyBlocked={missedPunchApplyBlocked}
                       leaveApplyBlocked={leaveApplyBlocked}
+                      clockPunchEnabled={clockPunchEnabled}
                       onApplyMissed={() => {
                         if (missedPunchTooEarly) {
                           Alert.alert(t('typeMissedPunch'), t('missedPunchBeforePunchTime'));
@@ -693,6 +818,7 @@ export default function ScheduleScreen() {
                         nested
                         workDateIso={todayIso}
                         attendanceRequests={myAttendanceRequests}
+                        clockPunchEnabled={clockPunchEnabled}
                       />
                     ))}
                   </View>
@@ -706,6 +832,7 @@ export default function ScheduleScreen() {
                       job={job}
                       workDateIso={todayIso}
                       attendanceRequests={myAttendanceRequests}
+                      clockPunchEnabled={workSummary?.clockPunchEnabled !== false}
                     />
                   ))}
                 </View>

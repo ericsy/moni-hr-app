@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
@@ -19,7 +20,7 @@ function MetaRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function FieldImpactPreviewList({ impacts }: Props) {
+function FieldImpactPreviewListComponent({ impacts }: Props) {
   const { t, i18n } = useTranslation();
   const language = i18n.language;
 
@@ -27,7 +28,7 @@ export function FieldImpactPreviewList({ impacts }: Props) {
     <View style={styles.list}>
       {impacts.map((impact) => {
         const row = buildFieldImpactDisplay(impact, t, language);
-        const key = `${impact.fieldJobId}-${impact.leaveItemId ?? 'x'}`;
+        const key = String(impact.fieldJobId);
         return (
           <View key={key} style={styles.card}>
             <View style={styles.cardHead}>
@@ -68,6 +69,8 @@ export function FieldImpactPreviewList({ impacts }: Props) {
     </View>
   );
 }
+
+export const FieldImpactPreviewList = memo(FieldImpactPreviewListComponent);
 
 const styles = StyleSheet.create({
   list: { gap: 10, marginTop: 8 },

@@ -10,7 +10,7 @@ import {
   findLeaveCoveringFieldJob,
   isFieldJobLeaveApproved,
 } from './fieldLeaveEligibility';
-import { isInFieldOutPunchWindow, shouldShowFieldHeroInService } from './fieldMissedPunchEligibility';
+import { isInFieldOutPunchWindow, findPunchableFieldClockInJob, shouldShowFieldHeroInService } from './fieldMissedPunchEligibility';
 import { hasOpenFullLeaveForShift } from './leaveRequestEligibility';
 import { getPunchDevicePayload } from './punchDevice';
 import { getApproximateServerNowDate } from './serverClock';
@@ -140,7 +140,7 @@ function isFieldJobLeaveCovered(
 }
 
 /**
- * Hero 用打卡动作：请假等审/已通过的外勤与整段请假店班不再要求打卡。
+ * Hero 用打卡动作：请假等审/已通过的外勤与整段请假店班不再要求打卡；部分请假店班仍可打卡。
  */
 export function resolveHeroWorkAction(params: {
   workAction?: CurrentPunchAction;
@@ -150,6 +150,8 @@ export function resolveHeroWorkAction(params: {
   requests?: LeaveRequest[];
   workDateIso: string;
   now?: Date;
+  /** 本地 Hero 已无店班焦点（均整段请假或已完成） */
+  storeHeroExhausted?: boolean;
 }): CurrentPunchAction | undefined {
   const requests = params.requests ?? [];
   const fieldJobs = params.fieldJobs ?? [];
@@ -159,6 +161,18 @@ export function resolveHeroWorkAction(params: {
     params.activeFieldJob,
     params.now,
   );
+
+  // 外勤已到开始打卡窗：优先外勤开始，避免被仍开着的早班店班上班窗盖住
+  const punchableFieldIn = findPunchableFieldClockInJob(fieldJobs, requests, params.now);
+  if (punchableFieldIn) {
+    const sync = punchableFieldIn.syncStoreClockIn;
+    action = {
+      action: sync ? 'FIELD_CLOCK_IN_SYNC_STORE' : 'FIELD_CLOCK_IN',
+      refType: 'field_job',
+      refId: punchableFieldIn.id,
+      geofence: null,
+    };
+  }
 
   if (action?.refType === 'field_job' && action.refId) {
     const job =
@@ -176,14 +190,21 @@ export function resolveHeroWorkAction(params: {
     }
   }
 
+  // 无外勤视为已覆盖；有外勤则须全部请假覆盖
   const allFieldsLeaveCovered =
-    fieldJobs.length > 0 && fieldJobs.every((job) => isFieldJobLeaveCovered(job, requests));
-  const hasPunchableStoreShift = storeShifts.some(
+    fieldJobs.length === 0 ||
+    fieldJobs.every((job) => isFieldJobLeaveCovered(job, requests));
+  const hasNonLeaveStoreShift = storeShifts.some(
     (slot) => !hasOpenFullLeaveForShift(requests, params.workDateIso, slot),
   );
 
-  // 外勤均已请假覆盖，且没有可打卡店班（无店班或店班整段请假）→ 今日无需打卡
-  if (allFieldsLeaveCovered && !hasPunchableStoreShift) {
+  // 无可打卡店班（无店班或全部整段请假），且外勤无/已请假 → 今日无需再打卡
+  if (allFieldsLeaveCovered && !hasNonLeaveStoreShift) {
+    return DONE_ACTION;
+  }
+
+  // 本地已无店班 Hero 焦点时，WAITING 一律视为已完成（外勤若可打会在上方被改写）
+  if (action?.action === 'WAITING' && params.storeHeroExhausted) {
     return DONE_ACTION;
   }
 
@@ -200,15 +221,15 @@ export function resolveHeroWorkAction(params: {
   return action;
 }
 
-/** 外勤「服务中」是否应挡住店班「离店下班」（仅实打卡 + 时段） */
+/** 外勤「服务中」是否应挡住店班「离店下班」：仅同步店班下班的外勤才挡住（由外勤完成代打） */
 export function fieldBlocksHeroStoreClockOut(params: {
   activeFieldJob?: TimelineFieldJobItem;
   now?: Date;
 }): boolean {
   const now = params.now ?? getApproximateServerNowDate();
-  return !!(
-    params.activeFieldJob && shouldShowFieldHeroInService(params.activeFieldJob, now)
-  );
+  const job = params.activeFieldJob;
+  if (!job?.syncStoreClockOut) return false;
+  return shouldShowFieldHeroInService(job, now);
 }
 
 export async function executeWorkPunch(params: {

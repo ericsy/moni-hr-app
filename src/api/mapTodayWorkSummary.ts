@@ -227,5 +227,13 @@ export function mapTodayWorkSummary(input: unknown): TodayWorkSummary {
     timeline: buildTimeline(source),
     dayStatus: asString(source.dayStatus || source.day_status, 'not_started') as TodayWorkSummary['dayStatus'],
     currentPunchAction: mapCurrentPunchAction(currentRaw),
+    clockPunchEnabled:
+      source.clockPunchEnabled === undefined && source.clock_punch_enabled === undefined
+        ? true
+        : asBool(source.clockPunchEnabled ?? source.clock_punch_enabled),
+    blockPublicHolidays:
+      source.blockPublicHolidays === undefined && source.block_public_holidays === undefined
+        ? false
+        : asBool(source.blockPublicHolidays ?? source.block_public_holidays),
   };
 }

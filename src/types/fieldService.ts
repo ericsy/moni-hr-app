@@ -71,6 +71,10 @@ export interface TodayWorkSummary {
   timeline: TodayWorkTimelineItem[];
   currentPunchAction: CurrentPunchAction;
   dayStatus: DayWorkStatus;
+  /** 门店是否要求打卡；false=本店免打卡 */
+  clockPunchEnabled?: boolean;
+  /** 门店是否屏蔽公共假期排班（与打卡无关） */
+  blockPublicHolidays?: boolean;
 }
 
 export interface EmployeePunchPayload {

@@ -58,7 +58,7 @@ export function groupPublishedScheduleByDate(
     const slot: MyPublishedShiftSlot = {
       id: String(item.id),
       areaName: item.areaName?.trim() || '—',
-      shiftName: item.shiftName?.trim() || '—',
+      shiftName: item.shiftName?.trim() || '',
       range: formatShiftRange(item.startTime, item.endTime),
       color: item.color?.trim() || undefined,
       isSubstitution: item.isSubstitution === true,

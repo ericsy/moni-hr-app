@@ -26,6 +26,8 @@ type Props = {
   nested?: boolean;
   workDateIso?: string;
   attendanceRequests?: LeaveRequest[];
+  /** 门店免打卡：隐藏打卡相关状态与漏打卡，仅保留请假 */
+  clockPunchEnabled?: boolean;
 };
 
 function formatJobTime(value: string, language: string): string {
@@ -115,12 +117,23 @@ function ContactActionRow({
   );
 }
 
-export function FieldJobRow({ job, nested = false, workDateIso, attendanceRequests = [] }: Props) {
+export function FieldJobRow({
+  job,
+  nested = false,
+  workDateIso,
+  attendanceRequests = [],
+  clockPunchEnabled = true,
+}: Props) {
   const { t, i18n } = useTranslation();
   const [detailVisible, setDetailVisible] = useState(false);
   const now = getApproximateServerNowDate();
-  const displayState = getFieldJobDisplayState(job, attendanceRequests, now);
-  const badge = badgeForState(displayState);
+  const punchExempt = !clockPunchEnabled;
+  const rawDisplayState = getFieldJobDisplayState(job, attendanceRequests, now);
+  const displayState =
+    punchExempt && rawDisplayState !== 'leave_pending' && rawDisplayState !== 'leave_approved'
+      ? null
+      : rawDisplayState;
+  const badge = displayState ? badgeForState(displayState) : null;
   const customerName = job.customerName?.trim() ?? '';
   const rawAddress = job.serviceAddress?.trim() ?? '';
   const address = rawAddress || t('todayTimelineNoAddress');
@@ -135,8 +148,8 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
   const endHm = formatJobTime(job.end, i18n.language);
   const range = `${startHm}\u00A0-\u00A0${endHm}`;
 
-  const canApplyIn = canApplyFieldMissedPunchIn(job, attendanceRequests, now);
-  const canApplyOut = canApplyFieldMissedPunchOut(job, attendanceRequests, now);
+  const canApplyIn = !punchExempt && canApplyFieldMissedPunchIn(job, attendanceRequests, now);
+  const canApplyOut = !punchExempt && canApplyFieldMissedPunchOut(job, attendanceRequests, now);
   const showMissedApply = canApplyIn || canApplyOut;
   const showLeaveApply = canApplyFieldLeave(job, attendanceRequests);
 
@@ -195,10 +208,12 @@ export function FieldJobRow({ job, nested = false, workDateIso, attendanceReques
               <Text style={styles.kind} numberOfLines={1}>
                 {t('todayTimelineFieldJob')}
               </Text>
-              <View style={[styles.pill, { backgroundColor: badge.bg }]}>
-                <Ionicons color={badge.text} name={badge.icon} size={11} />
-                <Text style={[styles.pillText, { color: badge.text }]}>{t(badge.key)}</Text>
-              </View>
+              {badge && displayState ? (
+                <View style={[styles.pill, { backgroundColor: badge.bg }]}>
+                  <Ionicons color={badge.text} name={badge.icon} size={11} />
+                  <Text style={[styles.pillText, { color: badge.text }]}>{t(badge.key)}</Text>
+                </View>
+              ) : null}
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.range}>{range}</Text>

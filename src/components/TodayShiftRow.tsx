@@ -15,7 +15,7 @@ import type { MyPublishedShiftSlot } from '../api/mapPublishedSchedule';
 import type { ShiftPunchRecord } from '../context/AuthContext';
 import { colors } from '../theme/colors';
 import { StoreShiftIcon } from './icons/StoreShiftIcon';
-import type { ShiftLeaveRequestStatus } from '../utils/leaveRequestEligibility';
+import type { ShiftLeaveRequestStatus, LeavePunchWindowAdjust } from '../utils/leaveRequestEligibility';
 import { getTodayShiftBadgeKind, type TodayShiftBadgeKind } from '../utils/scheduleHeroShift';
 import { getApproximateServerNowDate } from '../utils/serverClock';
 import { getShiftCardActions } from '../utils/shiftClockWindow';
@@ -29,8 +29,12 @@ type Props = {
   pairPunch?: ShiftPunchRecord;
   punchesKnown?: boolean;
   leaveRequestStatus?: ShiftLeaveRequestStatus;
+  /** 已通过部分请假对打卡窗的调整 */
+  leavePunchAdjust?: LeavePunchWindowAdjust | null;
   missedPunchApplyBlocked?: boolean;
   leaveApplyBlocked?: boolean;
+  /** 门店免打卡：隐藏打卡相关状态与漏打卡入口，仅保留请假 */
+  clockPunchEnabled?: boolean;
   onApplyMissed: () => void;
   onApplyLeave: () => void;
 };
@@ -41,6 +45,8 @@ function badgeStyle(kind: TodayShiftBadgeKind) {
       return { bg: '#D1FAE5', text: '#047857', icon: 'checkmark-circle-outline' as const };
     case 'clocked_in':
       return { bg: colors.primarySoft, text: colors.primaryDark, icon: 'time-outline' as const };
+    case 'incomplete':
+      return { bg: '#FEE2E2', text: '#B91C1C', icon: 'alert-circle-outline' as const };
     case 'completed':
       return { bg: '#E2E8F0', text: colors.textMuted, icon: 'checkmark-done-outline' as const };
     case 'leave_pending':
@@ -59,6 +65,8 @@ function badgeLabelKey(kind: TodayShiftBadgeKind): string {
       return 'shiftBadgeNotPunched';
     case 'clocked_in':
       return 'shiftBadgeClockedIn';
+    case 'incomplete':
+      return 'shiftBadgeIncomplete';
     case 'completed':
       return 'shiftBadgeCompleted';
     case 'leave_pending':
@@ -80,8 +88,10 @@ export function TodayShiftRow({
   pairPunch,
   punchesKnown = false,
   leaveRequestStatus = 'none',
+  leavePunchAdjust = null,
   missedPunchApplyBlocked = false,
   leaveApplyBlocked = false,
+  clockPunchEnabled = true,
   onApplyMissed,
   onApplyLeave,
 }: Props) {
@@ -90,6 +100,7 @@ export function TodayShiftRow({
   const [applyOpen, setApplyOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<LayoutRectangle | null>(null);
   const applyBtnRef = useRef<View>(null);
+  const punchExempt = !clockPunchEnabled;
 
   const actions = getShiftCardActions(
     workDateIso,
@@ -100,9 +111,10 @@ export function TodayShiftRow({
     punchesKnown,
     slot.overnightRole ?? 'normal',
     pairPunch,
+    leavePunchAdjust,
   );
 
-  const badgeKind = getTodayShiftBadgeKind(
+  const rawBadgeKind = getTodayShiftBadgeKind(
     workDateIso,
     slot,
     todayIso,
@@ -110,11 +122,23 @@ export function TodayShiftRow({
     pairPunch,
     punchesKnown,
     leaveRequestStatus,
+    leavePunchAdjust,
   );
-  const badge = badgeStyle(badgeKind);
-  const location = slot.areaName?.trim() || slot.shiftName?.trim() || '—';
+  const badgeKind =
+    punchExempt && rawBadgeKind !== 'leave_pending' && rawBadgeKind !== 'leave_approved'
+      ? null
+      : rawBadgeKind;
+  const badge = badgeKind ? badgeStyle(badgeKind) : null;
+  const location = (() => {
+    const area = slot.areaName?.trim();
+    const shift = slot.shiftName?.trim();
+    if (area && area !== '—') return area;
+    if (shift && shift !== '—') return shift;
+    return '—';
+  })();
 
-  const showMissedApplyAvailable = actions.showMissedApply && !missedPunchApplyBlocked;
+  const showMissedApplyAvailable =
+    !punchExempt && actions.showMissedApply && !missedPunchApplyBlocked;
   const leaveApplyAvailable = !leaveApplyBlocked;
   const showApplyEntry = showMissedApplyAvailable || leaveApplyAvailable;
 
@@ -143,13 +167,32 @@ export function TodayShiftRow({
           </Text>
         </View>
         <View style={styles.right}>
-          <View style={[styles.pill, styles.actionPill, { backgroundColor: badge.bg }]}>
-            <Ionicons color={badge.text} name={badge.icon} size={11} />
-            <Text style={[styles.pillText, { color: badge.text }]}>
-              {t(badgeLabelKey(badgeKind))}
-            </Text>
-          </View>
-          {showApplyEntry ? (
+          {badge && badgeKind ? (
+            <View style={[styles.pill, styles.actionPill, { backgroundColor: badge.bg }]}>
+              <Ionicons color={badge.text} name={badge.icon} size={11} />
+              <Text style={[styles.pillText, { color: badge.text }]}>
+                {t(badgeLabelKey(badgeKind))}
+              </Text>
+            </View>
+          ) : null}
+          {punchExempt && leaveApplyAvailable ? (
+            <Pressable
+              accessibilityLabel={t('shiftApplyLeave')}
+              accessibilityRole="button"
+              hitSlop={6}
+              onPress={onApplyLeave}
+              style={({ pressed }) => [
+                styles.pill,
+                styles.actionPill,
+                styles.applyPill,
+                pressed && styles.applyPillPressed,
+              ]}
+            >
+              <Ionicons color={colors.primaryDark} name="calendar-outline" size={11} />
+              <Text style={[styles.pillText, styles.applyPillText]}>{t('shiftApplyLeave')}</Text>
+            </Pressable>
+          ) : null}
+          {!punchExempt && showApplyEntry ? (
             <Pressable
               ref={applyBtnRef}
               accessibilityLabel={t('shiftApply')}

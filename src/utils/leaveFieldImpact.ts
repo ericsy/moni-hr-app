@@ -18,6 +18,30 @@ export function visibleFieldImpacts(
   });
 }
 
+export function sameFieldImpactPreview(
+  a: AppAttendanceFieldImpact[],
+  b: AppAttendanceFieldImpact[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (!x || !y) return false;
+    if (
+      x.fieldJobId !== y.fieldJobId ||
+      (x.overlapType ?? '') !== (y.overlapType ?? '') ||
+      (x.requiredAction ?? '') !== (y.requiredAction ?? '') ||
+      (x.customerName ?? '') !== (y.customerName ?? '') ||
+      (x.scheduledStart ?? '') !== (y.scheduledStart ?? '') ||
+      (x.scheduledEnd ?? '') !== (y.scheduledEnd ?? '')
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function formatFieldImpactLines(
   impacts: AppAttendanceFieldImpact[],
   t: TFunction,

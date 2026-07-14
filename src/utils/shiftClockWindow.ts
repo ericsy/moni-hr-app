@@ -1,4 +1,4 @@
-/** 班次打卡时间窗（与后端 /api/v1/app/clock/punch 规则对齐：上班开始前 10 分钟至下班；下班仅班次结束后 20 分钟内） */
+/** 班次打卡时间窗（与后端 /api/v1/app/clock/punch 规则对齐：上班开始前 10 分钟至下班；下班仅班次结束后 30 分钟内） */
 
 import { calendarDateKey, normalizeDateKey } from './calendarDateKey';
 import type { OvernightRole } from './overnightShiftPair';
@@ -40,7 +40,8 @@ function shiftPunchComplete(
 ): boolean {
   if (overnightRole === 'start') return !!punch?.clockInAt;
   if (overnightRole === 'end') return !!punch?.clockOutAt;
-  return !!punch?.clockInAt && !!punch?.clockOutAt;
+  // 已打下班即视为完成（允许未打上班仅打下班）
+  return !!punch?.clockOutAt;
 }
 
 function pendingPunchActions(): ShiftCardActions {
@@ -58,7 +59,14 @@ function pendingPunchActions(): ShiftCardActions {
 /** 上班打卡：开始前 N 分钟（与接口一致） */
 const CLOCK_IN_EARLY_MIN = 10;
 /** 下班打卡：结束后 N 分钟内（与接口一致） */
-const CLOCK_OUT_AFTER_END_MIN = 20;
+const CLOCK_OUT_AFTER_END_MIN = 30;
+
+/** 已通过部分请假对打卡窗的调整（与后端 AppClockPunchService 一致） */
+export type LeavePunchWindowAdjustInput = {
+  effect: 'late_in' | 'early_out';
+  partialFromMin: number;
+  partialToMin: number;
+};
 
 function parseHm(hm: string): number | null {
   const s = hm.trim();
@@ -261,6 +269,8 @@ export function getShiftCardActions(
   punchesKnown = true,
   overnightRole: OvernightRole = 'normal',
   pairPunch?: ShiftPunchTimes,
+  /** 已通过部分请假：晚来/早走放宽对应打卡窗 */
+  leavePunchAdjust?: LeavePunchWindowAdjustInput | null,
 ): ShiftCardActions {
   const parsed = parseShiftRange(range);
   const workDate = normalizeDateKey(workDateIso);
@@ -312,12 +322,17 @@ export function getShiftCardActions(
   }
 
   // 今天
-  if (hasIn && hasOut) {
+  // 已打下班即视为完成（允许未打上班仅打下班）
+  if (hasOut) {
     return withMissedApply(
       {
         showStatus: true,
         statusKey: 'shiftStatusCompleted',
-        statusParams: { time: formatHmFromIso(displayPunch!.clockInAt!) },
+        statusParams: displayPunch?.clockInAt
+          ? { time: formatHmFromIso(displayPunch.clockInAt) }
+          : displayPunch?.clockOutAt
+            ? { time: formatHmFromIso(displayPunch.clockOutAt) }
+            : undefined,
         showClockIn: false,
         showClockOut: false,
         showMissedApply: false,
@@ -336,7 +351,7 @@ export function getShiftCardActions(
           ? { time: formatHmFromIso(displayPunch.clockInAt) }
           : undefined,
         showClockIn: overnightRole !== 'end' && !hasIn,
-        showClockOut: overnightRole !== 'start' && hasIn && !hasOut,
+        showClockOut: overnightRole !== 'start' && !hasOut,
         emphasizeMissedApply: false,
       },
       missedApplyAllowed,
@@ -344,21 +359,45 @@ export function getShiftCardActions(
   }
 
   const nowMin = nowMinutes(now);
-  const clockInWindowStart = parsed.startMin - CLOCK_IN_EARLY_MIN;
+  let clockInWindowStart = parsed.startMin - CLOCK_IN_EARLY_MIN;
   const clockInWindowEnd = parsed.endMin;
-  const clockOutWindowStart = parsed.endMin;
+  let clockOutWindowStart = parsed.endMin;
   const clockOutWindowEnd = parsed.endMin + CLOCK_OUT_AFTER_END_MIN;
+
+  // 对齐后端：late_in 上班最早=partialStart；early_out 下班最早=partialEnd
+  if (leavePunchAdjust?.effect === 'late_in') {
+    clockInWindowStart = leavePunchAdjust.partialFromMin;
+  }
+  if (leavePunchAdjust?.effect === 'early_out') {
+    clockOutWindowStart = leavePunchAdjust.partialToMin;
+  }
 
   const canClockInNow = nowMin >= clockInWindowStart && nowMin <= clockInWindowEnd;
   const beforeClockInWindow = nowMin < clockInWindowStart;
   const afterClockInWindow = nowMin > clockInWindowEnd;
+  const canClockOutNow =
+    overnightRole !== 'start' &&
+    nowMin >= clockOutWindowStart &&
+    nowMin <= clockOutWindowEnd;
+
+  // 已到下班窗且未打下班：无论是否已打上班，优先推下班
+  if (canClockOutNow) {
+    return withMissedApply(
+      {
+        showStatus: true,
+        statusKey: hasIn ? 'shiftStatusClockedIn' : 'shiftStatusCanClockOut',
+        statusParams: displayPunch?.clockInAt
+          ? { time: formatHmFromIso(displayPunch.clockInAt) }
+          : undefined,
+        showClockIn: false,
+        showClockOut: true,
+        emphasizeMissedApply: false,
+      },
+      missedApplyAllowed,
+    );
+  }
 
   if (hasIn && !hasOut) {
-    const canClockOutNow =
-      overnightRole !== 'start' &&
-      nowMin >= clockOutWindowStart &&
-      nowMin <= clockOutWindowEnd;
-
     if (overnightRole === 'start') {
       return withMissedApply(
         {
@@ -381,19 +420,6 @@ export function getShiftCardActions(
           statusParams: { time: formatHmFromIso(displayPunch!.clockInAt!) },
           showClockIn: false,
           showClockOut: false,
-          emphasizeMissedApply: false,
-        },
-        missedApplyAllowed,
-      );
-    }
-    if (canClockOutNow) {
-      return withMissedApply(
-        {
-          showStatus: true,
-          statusKey: 'shiftStatusClockedIn',
-          statusParams: { time: formatHmFromIso(displayPunch!.clockInAt!) },
-          showClockIn: false,
-          showClockOut: true,
           emphasizeMissedApply: false,
         },
         missedApplyAllowed,
@@ -439,7 +465,7 @@ export function getShiftCardActions(
     );
   }
 
-  // 已过可上班打卡时段且未打上班卡
+  // 已过可上班打卡时段且未打上班卡，也未打下班卡
   return withMissedApply(
     {
       showStatus: true,
